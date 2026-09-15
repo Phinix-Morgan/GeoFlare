@@ -675,7 +675,7 @@ const changeRiskEvent = (direction) => {
       <header className="topbar">
 
         <div className="brand">
-          <h1>AGNI DRISHTI</h1>
+          <h1>GeoFlare</h1>
           <p>Satellite Thermal Intelligence</p>
         </div>
 
@@ -2089,7 +2089,7 @@ const changeRiskEvent = (direction) => {
     <div className="investigation-footer">
 
       <span>
-        AGNI DRISHTI
+        GeoFlare
       </span>
 
       <span>
