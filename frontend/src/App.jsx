@@ -1,459 +1,2304 @@
-import { useEffect, useMemo, useState } from "react";
-import { CircleMarker, MapContainer, TileLayer, useMap } from "react-leaflet";
+import React, { useEffect, useRef, useState } from "react";
+import Globe from "react-globe.gl";
+import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
 
-const API = "http://127.0.0.1:8000";
-const REFRESH_MS = 60_000;
+const API_BASE_URL = "http://127.0.0.1:8000";
 
-const RISK_COLORS = {
-  CRITICAL: "#ff4f5e",
-  HIGH: "#ff9b4a",
-  MEDIUM: "#f3cf55",
-  LOW: "#39d98a",
-};
+function formatPersistence(days) {
+  const totalMinutes = Math.max(0, Math.round(Number(days || 0) * 24 * 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
 
-const CLASS_OPTIONS = [
-  ["ALL", "All classifications"],
-  ["industrial_fire", "Industrial fire"],
-  ["natural_fire", "Natural fire"],
-  ["agricultural_burning", "Agricultural burning"],
-  ["persistent_thermal_source", "Persistent thermal source"],
-  ["uncertain", "Uncertain"],
-];
-
-function pretty(value) {
-  if (!value) return "Unknown";
-  return String(value).replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
 }
 
-function number(value, digits = 1) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
-  return Number(value).toFixed(digits);
+function formatDistance(distance) {
+  const value = Number(distance);
+  if (!Number.isFinite(value)) return "N/A";
+  if (value < 1) return `${Math.round(value * 1000)} m`;
+  return `${value.toFixed(1)} km`;
 }
 
-function riskColor(level) {
-  return RISK_COLORS[String(level || "LOW").toUpperCase()] || RISK_COLORS.LOW;
+function formatEventType(predictedClass) {
+  const labels = {
+    industrial_fire: "Industrial Fire",
+    natural_fire: "Natural Fire",
+    agricultural_burning: "Agricultural Burning",
+    persistent_thermal_source: "Persistent Thermal Source",
+    gas_flare: "Gas Flare",
+    uncertain: "Uncertain Thermal Event",
+  };
+
+  return labels[predictedClass] || "Thermal Anomaly";
 }
 
-function MapController({ selected }) {
-  const map = useMap();
+function intensityFromFrp(frp) {
+  const value = Number(frp || 0);
+
+  if (value >= 50) return "HIGH";
+  if (value >= 10) return "MEDIUM";
+  return "LOW";
+}
+
+function mapBackendEvent(event) {
+  return {
+    id: `FIRE-${String(event.event_id).padStart(3, "0")}`,
+    backendId: event.event_id,
+    lat: Number(event.latitude),
+    lng: Number(event.longitude),
+    location: "India",
+    type: formatEventType(event.predicted_class),
+    risk: event.risk_level || "LOW",
+    confidence: Math.round(Number(event.prediction_confidence || 0) * 100),
+    satelliteConfidence: Math.round(Number(event.confidence_score || 0) * 100),
+    persistence: formatPersistence(event.persistence_days),
+    persistenceDays: Number(event.persistence_days || 0),
+    intensity: intensityFromFrp(event.frp),
+    frp: Number(event.frp || 0),
+    facility:
+      Number.isFinite(Number(event.distance_to_industry_km))
+        ? "Industrial / mapped infrastructure"
+        : "Mapped infrastructure",
+    distance: formatDistance(event.distance_to_industry_km),
+    distanceToIndustryKm: Number(event.distance_to_industry_km),
+    distanceToPowerKm: Number(event.distance_to_power_km),
+    distanceToOilGasKm: Number(event.distance_to_oil_gas_km),
+    distanceToRoadKm: Number(event.distance_to_road_km),
+    distanceToSettlementKm: Number(event.distance_to_settlement_km),
+    detectionCount: Number(event.detection_count || 0),
+    firstDetectedAt: event.first_detected_at,
+    lastDetectedAt: event.last_detected_at,
+    acqDatetime: event.acq_datetime,
+    satellite: event.satellite,
+    instrument: event.instrument,
+    landcoverName: event.landcover_name,
+    classificationStatus: event.classification_status,
+    modelPredictedClass: event.model_predicted_class,
+    predictionConfidence: Number(event.prediction_confidence || 0),
+    riskScore: Number(event.risk_score || 0),
+    decisionStatus: event.decision_status,
+    riskReasons: event.risk_reasons || "No risk explanation available.",
+    nearIndustry: Boolean(event.near_industry_5km),
+    nearPower: Boolean(event.near_power_10km),
+    nearOilGas: Boolean(event.near_oil_gas_10km),
+    nearRoad: Boolean(event.near_road_1km),
+    nearSettlement: Boolean(event.near_settlement_5km),
+    industrialContext: Boolean(event.industrial_context),
+    settlementContext: Boolean(event.settlement_context),
+    roadContext: Boolean(event.road_context),
+    vegetationContext: Boolean(event.vegetation_context),
+    agricultureContext: Boolean(event.agriculture_context),
+    builtupContext: Boolean(event.builtup_context),
+    waterContext: Boolean(event.water_context),
+    wetlandContext: Boolean(event.wetland_context),
+    reason:
+      event.risk_reasons ||
+      "Risk assessment combines satellite thermal evidence, persistence, mapped infrastructure, land-cover context, and model classification.",
+  };
+}
+
+function EventMap({ event }) {
+  const mapRef = useRef(null);
+  const containerRef = useRef(null);
 
   useEffect(() => {
-    if (!selected) {
-      map.setView([22.5, 79], 5.1, { animate: false });
-      return;
+    if (!containerRef.current) return;
+
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
     }
-    const [lon, lat] = selected.geometry.coordinates;
-    map.flyTo([lat, lon], 7.4, { duration: 0.7 });
-  }, [map, selected]);
 
-  return null;
-}
+    const map = L.map(containerRef.current, {
+      zoomControl: true,
+      attributionControl: true,
+    }).setView(
+      [event.lat, event.lng],
+      12
+    );
 
-function ThermalMarker({ event, selected, onClick }) {
-  const p = event.properties;
-  const [lon, lat] = event.geometry.coordinates;
-  const color = riskColor(p.risk_level);
-  const risk = Number(p.risk_score || 0);
-  const frp = Number(p.frp || 0);
-  const radius = Math.max(5, Math.min(12, 5 + risk / 30 + frp / 45));
+    mapRef.current = map;
+
+    /*
+      OpenStreetMap base layer
+    */
+    L.tileLayer(
+      "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors",
+      }
+    ).addTo(map);
+
+
+    /*
+      Thermal event marker
+    */
+
+    const eventIcon = L.divIcon({
+      className: "thermal-map-marker",
+      html: `
+        <div class="thermal-marker-ring">
+          <div class="thermal-marker-core"></div>
+        </div>
+      `,
+      iconSize: [40, 40],
+      iconAnchor: [20, 20],
+    });
+
+
+    L.marker(
+      [event.lat, event.lng],
+      {
+        icon: eventIcon,
+      }
+    )
+      .addTo(map)
+      .bindPopup(`
+        <div class="map-popup">
+          <strong>${event.id}</strong>
+          <span>${event.location}</span>
+          <b>${event.risk} RISK</b>
+        </div>
+      `);
+
+
+    /*
+      Investigation radius
+    */
+
+    L.circle(
+      [event.lat, event.lng],
+      {
+        radius: 1000,
+
+        color: "#ff4b42",
+
+        weight: 1,
+
+        opacity: 0.8,
+
+        fillColor: "#ff4035",
+
+        fillOpacity: 0.08,
+      }
+    ).addTo(map);
+
+
+    /*
+      Nearby industrial facilities
+      Demo coordinates for UI.
+      Backend will replace these later.
+    */
+
+    const facilities = [
+      {
+        lat: event.lat + 0.009,
+        lng: event.lng + 0.006,
+        name: "Industrial Facility",
+        distance: event.distance,
+      },
+
+      {
+        lat: event.lat - 0.014,
+        lng: event.lng + 0.011,
+        name: "Processing Facility",
+        distance: "2.1 km",
+      },
+
+      {
+        lat: event.lat + 0.018,
+        lng: event.lng - 0.012,
+        name: "Power Infrastructure",
+        distance: "3.4 km",
+      },
+    ];
+
+
+    facilities.forEach((facility) => {
+
+      const facilityIcon = L.divIcon({
+        className: "facility-map-marker",
+
+        html: `
+          <div class="facility-marker">
+            🏭
+          </div>
+        `,
+
+        iconSize: [30, 30],
+
+        iconAnchor: [15, 15],
+      });
+
+
+      L.marker(
+        [facility.lat, facility.lng],
+        {
+          icon: facilityIcon,
+        }
+      )
+        .addTo(map)
+        .bindPopup(`
+          <div class="map-popup">
+            <strong>${facility.name}</strong>
+            <span>Industrial infrastructure</span>
+            <b>${facility.distance}</b>
+          </div>
+        `);
+
+    });
+
+
+    /*
+      Event → nearest facility line
+    */
+
+    L.polyline(
+      [
+        [event.lat, event.lng],
+        [facilities[0].lat, facilities[0].lng],
+      ],
+      {
+        color: "#ff6b61",
+
+        weight: 1,
+
+        dashArray: "5, 7",
+
+        opacity: 0.75,
+      }
+    ).addTo(map);
+
+
+    /*
+      Force correct map size
+    */
+
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 200);
+
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+
+  }, [event]);
+
 
   return (
-    <>
-      <CircleMarker
-        center={[lat, lon]}
-        radius={radius * 2.7}
-        pathOptions={{
-          color,
-          fillColor: color,
-          fillOpacity: selected ? 0.14 : 0.035,
-          opacity: selected ? 0.7 : 0.16,
-          weight: 1,
-        }}
-        eventHandlers={{ click: onClick }}
-      />
-      <CircleMarker
-        center={[lat, lon]}
-        radius={selected ? radius + 3 : radius}
-        pathOptions={{
-          color: selected ? "#ffffff" : color,
-          fillColor: color,
-          fillOpacity: 0.95,
-          opacity: 1,
-          weight: selected ? 2 : 1,
-        }}
-        eventHandlers={{ click: onClick }}
-      />
-    </>
+    <div
+      ref={containerRef}
+      className="real-event-map"
+    />
   );
 }
 
-function Icon({ name, size = 16 }) {
-  const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" };
-  const paths = {
-    search: <><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></>,
-    filter: <><path d="M4 6h16" /><path d="M7 12h10" /><path d="M10 18h4" /></>,
-    refresh: <><path d="M20 11a8 8 0 0 0-14.9-4" /><path d="M4 4v4h4" /><path d="M4 13a8 8 0 0 0 14.9 4" /><path d="M20 20v-4h-4" /></>,
-    close: <><path d="m6 6 12 12" /><path d="m18 6-12 12" /></>,
-    arrow: <><path d="M5 12h13" /><path d="m13 6 6 6-6 6" /></>,
-    crosshair: <><circle cx="12" cy="12" r="5" /><path d="M12 2v3" /><path d="M12 19v3" /><path d="M2 12h3" /><path d="M19 12h3" /></>,
-    layers: <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 16 9 5 9-5" /></>,
-    pulse: <><path d="M3 12h4l2-6 4 12 2-6h6" /></>,
-  };
-  return <svg {...common}>{paths[name]}</svg>;
+
+function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
+  const mapRef = useRef(null);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
+    }
+
+    const map = L.map(containerRef.current, {
+      zoomControl: true,
+      attributionControl: true,
+      minZoom: 4,
+      maxZoom: 12,
+    }).setView([22.5, 79], 5);
+
+    mapRef.current = map;
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(map);
+
+    events.forEach((event) => {
+      const isHigh = event.risk === "HIGH";
+      const isSelected = selectedEvent?.id === event.id;
+
+      const icon = L.divIcon({
+        className: "india-risk-marker",
+        html: `
+          <div class="india-marker-shell ${isHigh ? "high" : "medium"} ${isSelected ? "selected" : ""}">
+            <div class="india-marker-core"></div>
+          </div>
+        `,
+        iconSize: [34, 34],
+        iconAnchor: [17, 17],
+      });
+
+      const marker = L.marker([event.lat, event.lng], {
+        icon,
+        title: event.id,
+      })
+        .addTo(map)
+        .bindTooltip(
+          `<strong>${event.id}</strong><br/>${event.location}<br/>${event.risk} RISK`,
+          { direction: "top", offset: [0, -15] }
+        );
+
+      marker.on("click", () => onSelectEvent(event));
+
+      if (isHigh) {
+        L.circle([event.lat, event.lng], {
+          radius: isSelected ? 32000 : 18000,
+          color: "#ff4438",
+          weight: 1,
+          opacity: isSelected ? 0.7 : 0.35,
+          fillColor: "#ff4438",
+          fillOpacity: isSelected ? 0.12 : 0.04,
+          interactive: false,
+        }).addTo(map);
+      }
+    });
+
+    setTimeout(() => map.invalidateSize(), 150);
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [events, onSelectEvent]);
+
+  useEffect(() => {
+    if (!mapRef.current || !selectedEvent) return;
+
+    mapRef.current.flyTo(
+      [selectedEvent.lat, selectedEvent.lng],
+      7,
+      { duration: 1.1 }
+    );
+  }, [selectedEvent]);
+
+  return (
+    <div className="india-risk-map-wrap">
+      <div className="india-map-header">
+        <div>
+          <span>INDIA THERMAL SURVEILLANCE</span>
+          <strong>RISK EVENT MAP</strong>
+        </div>
+
+        <div className="india-map-legend">
+          <span><i className="legend-high"></i> HIGH</span>
+          <span><i className="legend-medium"></i> MEDIUM</span>
+        </div>
+      </div>
+
+      <div ref={containerRef} className="india-risk-map"></div>
+
+      <div className="india-map-status">
+        <span className="map-live-dot"></span>
+        LIVE EVENT OVERLAY
+      </div>
+    </div>
+  );
 }
 
 function App() {
-  const [events, setEvents] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [riskFilter, setRiskFilter] = useState("ALL");
-  const [classFilter, setClassFilter] = useState("ALL");
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [apiError, setApiError] = useState("");
-  const [lastSync, setLastSync] = useState(null);
-  const [showFilters, setShowFilters] = useState(false);
+  const globeRef = useRef();
 
-  async function fetchEvents() {
-    try {
-      const response = await fetch(`${API}/events/geojson`);
-      if (!response.ok) throw new Error(`API ${response.status}`);
-      const data = await response.json();
-      setEvents(data.features || []);
-      setLastSync(new Date());
-      setApiError("");
-    } catch (error) {
-      setApiError(error.message);
-    } finally {
-      setLoading(false);
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [investigationOpen, setInvestigationOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("Overview");
+  const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [eventsError, setEventsError] = useState(null);
+  const [dashboardView, setDashboardView] = useState("global");
+  const [screenWidth, setScreenWidth] = useState(window.innerWidth);
+  const [replayStep, setReplayStep] = useState(4);
+  const [isReplaying, setIsReplaying] = useState(false);
+
+
+    const highRiskEvents = events.filter(
+    (event) => event.risk === "HIGH"
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadEvents = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/events`);
+
+        if (!response.ok) {
+          throw new Error(`Backend returned HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (!Array.isArray(data)) {
+          throw new Error("Backend returned an invalid event payload.");
+        }
+
+        const mappedEvents = data.map(mapBackendEvent);
+
+        if (!cancelled) {
+          setEvents(mappedEvents);
+          setEventsError(null);
+        }
+      } catch (error) {
+        console.error("Failed to load GeoFlare events:", error);
+
+        if (!cancelled) {
+          setEventsError(error.message || "Unable to load events.");
+        }
+      } finally {
+        if (!cancelled) {
+          setEventsLoading(false);
+        }
+      }
+    };
+
+    loadEvents();
+    const refreshTimer = setInterval(loadEvents, 60000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(refreshTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedEvent && events.length > 0) {
+      const firstHighRisk = events.find((event) => event.risk === "HIGH");
+      setSelectedEvent(firstHighRisk || events[0]);
     }
+  }, [events, selectedEvent]);
+
+  const openRiskEvent = (event) => {
+    if (!event) return;
+  setSelectedEvent(event);
+  setPanelOpen(true);
+  setActiveTab("Overview");
+
+  if (globeRef.current) {
+    globeRef.current.pointOfView(
+      {
+        lat: event.lat,
+        lng: event.lng,
+        altitude: 1.35,
+      },
+      900
+    );
+  }
+};
+
+const changeRiskEvent = (direction) => {
+  if (!selectedEvent) return;
+
+  const currentIndex = highRiskEvents.findIndex(
+    (event) => event.id === selectedEvent.id
+  );
+
+  if (currentIndex === -1) {
+    openRiskEvent(highRiskEvents[0]);
+    return;
   }
 
-  useEffect(() => {
-    fetchEvents();
-    const timer = setInterval(fetchEvents, REFRESH_MS);
-    return () => clearInterval(timer);
-  }, []);
+  const nextIndex =
+    (currentIndex + direction + highRiskEvents.length) %
+    highRiskEvents.length;
 
-  useEffect(() => {
-    const handler = (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        document.querySelector("#signal-search")?.focus();
+  openRiskEvent(highRiskEvents[nextIndex]);
+};
+
+  const startReplay = () => {
+    if (isReplaying) return;
+
+    setIsReplaying(true);
+    setReplayStep(0);
+
+    let step = 0;
+
+    const interval = setInterval(() => {
+      step += 1;
+      setReplayStep(step);
+
+      if (step >= 4) {
+        clearInterval(interval);
+        setIsReplaying(false);
       }
-      if (event.key === "Escape") setSelected(null);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
-  const stats = useMemo(() => {
-    const result = { total: events.length, critical: 0, high: 0, medium: 0, low: 0, uncertain: 0, classified: 0, maxFrp: 0, riskTotal: 0 };
-    for (const event of events) {
-      const p = event.properties;
-      const level = String(p.risk_level || "LOW").toLowerCase();
-      if (level in result) result[level] += 1;
-      if (p.classification_status === "UNCERTAIN") result.uncertain += 1;
-      else result.classified += 1;
-      result.maxFrp = Math.max(result.maxFrp, Number(p.frp || 0));
-      result.riskTotal += Number(p.risk_score || 0);
-    }
-    result.avgRisk = events.length ? result.riskTotal / events.length : 0;
-    return result;
-  }, [events]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return events.filter((event) => {
-      const p = event.properties;
-      const classValue = p.predicted_class || p.model_predicted_class || "uncertain";
-      const riskMatch = riskFilter === "ALL" || p.risk_level === riskFilter;
-      const classMatch = classFilter === "ALL" || classValue === classFilter;
-      if (!q) return riskMatch && classMatch;
-      const [lon, lat] = event.geometry.coordinates;
-      const text = [classValue, p.landcover_name, p.risk_level, p.satellite, p.instrument, lat, lon].join(" ").toLowerCase();
-      return riskMatch && classMatch && text.includes(q);
-    });
-  }, [events, query, riskFilter, classFilter]);
-
-  const priority = useMemo(() => [...filtered].sort((a, b) => Number(b.properties.risk_score || 0) - Number(a.properties.risk_score || 0)).slice(0, 8), [filtered]);
-
-  const classCounts = useMemo(() => {
-    const counts = {};
-    for (const event of events) {
-      const key = event.properties.predicted_class || "uncertain";
-      counts[key] = (counts[key] || 0) + 1;
-    }
-    return counts;
-  }, [events]);
-
-  const reset = () => {
-    setRiskFilter("ALL");
-    setClassFilter("ALL");
-    setQuery("");
+    }, 900);
   };
 
+  useEffect(() => {
+    const handleResize = () => {
+      setScreenWidth(window.innerWidth);
+    };
+
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!globeRef.current) return;
+
+    globeRef.current.pointOfView(
+      {
+        lat: 22.5,
+        lng: 79,
+        altitude: 1.75
+      },
+      1200
+    );
+
+    globeRef.current.controls().enableZoom = true;
+    globeRef.current.controls().enablePan = false;
+    globeRef.current.controls().autoRotate = false;
+    globeRef.current.controls().rotateSpeed = 0.35;
+  }, []);
+
+  const focusEvent = (event) => {
+    if (!globeRef.current) return;
+
+    globeRef.current.pointOfView(
+      {
+        lat: event.lat,
+        lng: event.lng,
+        altitude: panelOpen ? 1.05 : 1.25
+      },
+      900
+    );
+  };
+
+  const openEvent = (event) => {
+    setSelectedEvent(event);
+    setPanelOpen(true);
+
+    setTimeout(() => {
+      focusEvent(event);
+    }, 100);
+  };
+
+  const openRiskEvents = () => {
+    const firstHighRisk = events.find(
+      (event) => event.risk === "HIGH"
+    );
+
+    if (firstHighRisk) {
+      openEvent(firstHighRisk);
+    } else if (events.length > 0) {
+      openEvent(events[0]);
+    }
+  };
+
+  const closePanel = () => {
+    setPanelOpen(false);
+    setSelectedEvent(null);
+
+    setTimeout(() => {
+      if (!globeRef.current) return;
+
+      globeRef.current.pointOfView(
+        {
+          lat: 22.5,
+          lng: 79,
+          altitude: 1.75
+        },
+        1000
+      );
+    }, 100);
+  };
+
+  const changeEvent = (direction) => {
+    if (!selectedEvent) return;
+
+    const currentIndex = events.findIndex(
+      (event) => event.id === selectedEvent.id
+    );
+
+    let nextIndex =
+      currentIndex + direction;
+
+    if (nextIndex < 0) {
+      nextIndex = events.length - 1;
+    }
+
+    if (nextIndex >= events.length) {
+      nextIndex = 0;
+    }
+
+    const nextEvent = events[nextIndex];
+
+    setSelectedEvent(nextEvent);
+
+    setTimeout(() => {
+      focusEvent(nextEvent);
+    }, 50);
+  };
+
+  const focusIndia = () => {
+    setPanelOpen(false);
+    setSelectedEvent(null);
+    setDashboardView("global");
+
+    if (!globeRef.current) return;
+
+    globeRef.current.pointOfView(
+      {
+        lat: 22.5,
+        lng: 79,
+        altitude: 1.75
+      },
+      1000
+    );
+  };
+
+  const globeWidth = panelOpen
+    ? screenWidth * 0.62
+    : screenWidth;
+
   return (
-    <div className="app-shell">
-      <header className="header">
+    <div className="app">
+
+      {/* ================= HEADER ================= */}
+
+      <header className="topbar">
+
         <div className="brand">
-          <div className="brand-mark"><span /></div>
-          <div>
-            <div className="brand-name">GEOFLARE</div>
-            <div className="brand-sub">AI-POWERED GEOSPATIAL THERMAL INTELLIGENCE</div>
-          </div>
+          <h1>AGNI DRISHTI</h1>
+          <p>Satellite Thermal Intelligence</p>
         </div>
 
-        <div className="header-center">
-          <div className="live-indicator"><span /> LIVE MONITORING</div>
-          <div className="source-label">NASA FIRMS / VIIRS NOAA-20</div>
+        <nav className="navigation">
+
+          <button
+            className={dashboardView === "global" && !panelOpen ? "nav-button active" : "nav-button"}
+            onClick={() => {
+              setDashboardView("global");
+              focusIndia();
+            }}
+          >
+            ◉ Global View
+          </button>
+
+          <button
+            className={panelOpen ? "nav-button risk-button active" : "nav-button risk-button"}
+            onClick={() => {
+              setDashboardView("risk");
+              openRiskEvents();
+            }}
+          >
+            ● Risk Events
+          </button>
+
+          <button
+            className={dashboardView === "facilities" ? "nav-button active" : "nav-button"}
+            onClick={() => {
+              setPanelOpen(false);
+              setSelectedEvent(null);
+              setDashboardView("facilities");
+            }}
+          >
+            ▦ Facilities
+          </button>
+
+          <button
+            className={dashboardView === "analytics" ? "nav-button active" : "nav-button"}
+            onClick={() => {
+              setPanelOpen(false);
+              setSelectedEvent(null);
+              setDashboardView("analytics");
+            }}
+          >
+            ▥ Analytics
+          </button>
+
+          <button
+            className={dashboardView === "reports" ? "nav-button active" : "nav-button"}
+            onClick={() => {
+              setPanelOpen(false);
+              setSelectedEvent(null);
+              setDashboardView("reports");
+            }}
+          >
+            ▤ Reports
+          </button>
+
+        </nav>
+
+        <div className="live-status">
+          <span className="status-dot"></span>
+          LIVE
         </div>
 
-        <div className="header-actions">
-          <div className="sync-label">
-            <span>LAST SYNC</span>
-            <strong>{lastSync ? lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "--:--:--"}</strong>
-          </div>
-          <button className="refresh-button" onClick={fetchEvents} disabled={loading} title="Refresh events"><Icon name="refresh" /></button>
-        </div>
       </header>
 
-      <main className="layout">
-        <aside className="left-panel panel">
-          <div className="panel-heading">
-            <div><span className="eyebrow">MONITOR</span><h1>India Sector</h1></div>
-            <span className={`status-dot ${apiError ? "offline" : ""}`} />
+
+      {/* ================= GLOBE ================= */}
+
+      <main
+        className={
+          panelOpen
+            ? "globe-section panel-mode"
+            : "globe-section"
+        }
+      >
+
+        {eventsLoading && (
+          <div className="instructions">
+            Loading live thermal events...
           </div>
+        )}
 
-          <section className="overview-block">
-            <div className="total-row"><span>Active thermal events</span><strong>{stats.total}</strong></div>
-            <div className="overview-grid">
-              <Stat label="Critical" value={stats.critical} tone="CRITICAL" />
-              <Stat label="High" value={stats.high} tone="HIGH" />
-              <Stat label="Medium" value={stats.medium} tone="MEDIUM" />
-              <Stat label="Low" value={stats.low} tone="LOW" />
-            </div>
-          </section>
-
-          <section className="section">
-            <div className="section-title"><span>Threat distribution</span><span>{stats.total ? `${Math.round((stats.classified / stats.total) * 100)}% classified` : "0% classified"}</span></div>
-            <div className="distribution-bar">
-              {[["CRITICAL", stats.critical], ["HIGH", stats.high], ["MEDIUM", stats.medium], ["LOW", stats.low]].map(([level, value]) => (
-                <span key={level} style={{ width: `${stats.total ? (value / stats.total) * 100 : 0}%`, background: riskColor(level) }} />
-              ))}
-            </div>
-            <div className="distribution-rows">
-              {[["CRITICAL", stats.critical], ["HIGH", stats.high], ["MEDIUM", stats.medium], ["LOW", stats.low]].map(([level, value]) => (
-                <div key={level}><span><i style={{ background: riskColor(level) }} />{level}</span><strong>{value}</strong></div>
-              ))}
-            </div>
-          </section>
-
-          <section className="section filters-section">
-            <div className="section-title"><span>Find signals</span><button className="text-button" onClick={reset}>Reset</button></div>
-            <label className="search-box">
-              <Icon name="search" size={15} />
-              <input id="signal-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search class, land cover, coordinates" />
-              <kbd>Ctrl K</kbd>
-            </label>
-
-            <button className="filter-toggle" onClick={() => setShowFilters((value) => !value)}>
-              <span><Icon name="filter" size={15} /> Filters</span><b>{showFilters ? "Hide" : "Show"}</b>
-            </button>
-
-            {showFilters && (
-              <div className="filter-body">
-                <div className="filter-label">Risk level</div>
-                <div className="risk-filter-grid">
-                  {["ALL", "CRITICAL", "HIGH", "MEDIUM", "LOW"].map((level) => (
-                    <button key={level} className={riskFilter === level ? "active" : ""} onClick={() => setRiskFilter(level)}>{level === "ALL" ? "All" : level}</button>
-                  ))}
-                </div>
-                <div className="filter-label">Classification</div>
-                <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
-                  {CLASS_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-            )}
-          </section>
-
-          <section className="section context-section">
-            <div className="section-title"><span>System context</span></div>
-            <ContextRow label="Data source" value="NASA FIRMS" />
-            <ContextRow label="Spatial context" value="OSM + WorldCover" />
-            <ContextRow label="ML engine" value="Random Forest" />
-            <ContextRow label="Risk engine" value="GeoFlare v0.1" />
-          </section>
-
-          <div className={`pipeline-status ${apiError ? "degraded" : ""}`}>
-            <div className="pipeline-icon"><Icon name="pulse" size={18} /></div>
-            <div><span>Pipeline</span><strong>{apiError ? "Degraded" : "Operational"}</strong></div>
-            <span className="pipeline-light" />
+        {eventsError && !eventsLoading && (
+          <div className="instructions">
+            Backend connection error: {eventsError}
           </div>
-        </aside>
+        )}
 
-        <section className="map-panel panel">
-          <div className="map-toolbar">
-            <div><span className="eyebrow">THERMAL ACTIVITY</span><h2>Live event map</h2></div>
-            <div className="map-tools">
-              <span className="event-count">{filtered.length} signals</span>
-              <button title="Map layers"><Icon name="layers" /></button>
-              <button title="Map center"><Icon name="crosshair" /></button>
+        <Globe
+          ref={globeRef}
+
+          width={globeWidth}
+          height={screenWidth < 900 ? window.innerHeight - 80 : window.innerHeight}
+
+          backgroundColor="#070b10"
+
+          globeImageUrl="https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg"
+
+          atmosphereColor="#315d7d"
+          atmosphereAltitude={0.12}
+
+          pointsData={events}
+
+          pointLat="lat"
+          pointLng="lng"
+
+          pointColor={(event) =>
+            event.risk === "HIGH"
+              ? "#ff3b30"
+              : "#ff9f43"
+          }
+
+          pointAltitude={0.025}
+
+          pointRadius={(event) =>
+            event.risk === "HIGH"
+              ? 0.13
+              : 0.09
+          }
+
+          pointResolution={12}
+
+          pointsMerge={false}
+
+          pointLabel={(event) => `
+            <div class="globe-tooltip">
+              <strong>${event.location}</strong>
+              <br/>
+              ${event.risk} RISK
+              <br/>
+              ${event.type}
             </div>
-          </div>
+          `}
 
-          <div className="map-frame">
-            <MapContainer center={[22.5, 79]} zoom={5.1} minZoom={4} maxZoom={11} maxBounds={[[4, 60], [40, 105]]} maxBoundsViscosity={0.7} scrollWheelZoom className="map">
-              <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <MapController selected={selected} />
-              {filtered.map((event, index) => <ThermalMarker key={`${event.geometry.coordinates.join("-")}-${index}`} event={event} selected={selected === event} onClick={() => setSelected(event)} />)}
-            </MapContainer>
-            <div className="map-overlay" />
-            <div className="map-grid" />
+          onPointClick={openEvent}
 
-            <div className="map-info-card">
-              <span>INDIA / 01</span>
-              <strong>Thermal field</strong>
-              <p>Near-real-time FIRMS detections enriched with geospatial context.</p>
-            </div>
+          ringsData={events.filter(
+            (event) => event.risk === "HIGH"
+          )}
 
-            <div className="map-coordinates"><span>22.5000 N</span><i /><span>79.0000 E</span></div>
+          ringLat="lat"
+          ringLng="lng"
 
-            <div className="map-bottom-left">
-              <div className="legend-title">Risk</div>
-              {Object.keys(RISK_COLORS).map((level) => <div className="legend-item" key={level}><i style={{ background: riskColor(level) }} />{level}</div>)}
-            </div>
+          ringColor="#ff3b30"
 
-            <div className="map-metrics">
-              <Metric label="Peak FRP" value={`${number(stats.maxFrp)} MW`} />
-              <Metric label="Average risk" value={`${number(stats.avgRisk)} / 100`} />
-              <Metric label="Needs review" value={stats.uncertain} />
-            </div>
+          ringMaxRadius={2.2}
 
-            <div className="map-scale">100 km</div>
-          </div>
+          ringPropagationSpeed={1.4}
 
-          <div className="map-footer">
-            <div><span>Classification coverage</span><strong>{stats.total ? `${Math.round((stats.classified / stats.total) * 100)}%` : "0%"}</strong></div>
-            <div className="coverage-track"><span style={{ width: `${stats.total ? (stats.classified / stats.total) * 100 : 0}%` }} /></div>
-            <div className="coverage-chips">
-              {Object.entries(classCounts).slice(0, 3).map(([key, value]) => <button key={key} onClick={() => setClassFilter(key)}>{pretty(key)} <b>{value}</b></button>)}
-            </div>
-          </div>
-        </section>
+          ringRepeatPeriod={1400}
+        />
 
-        <aside className="right-panel panel">
-          {selected ? <EventDetail event={selected} onClose={() => setSelected(null)} /> : <PrioritySignals events={priority} onSelect={setSelected} />}
-        </aside>
+
+        {/* Focus India */}
+
+        {!panelOpen && (
+          <button
+            className="focus-india"
+            onClick={focusIndia}
+          >
+            🌏 Focus India
+          </button>
+        )}
+
       </main>
 
-      <footer className="footer">
-        <span><i /> GEOFLARE CORE</span>
-        <span>{stats.total} active detections</span>
-        <span>{stats.uncertain} require review</span>
-        <span>Auto refresh 60 sec</span>
-        <span className="footer-right">India sector / build 01</span>
-      </footer>
-    </div>
-  );
-}
 
-function Stat({ label, value, tone }) {
-  return <div className="stat"><span><i style={{ background: riskColor(tone) }} />{label}</span><strong>{value}</strong></div>;
-}
+      {/* ================= EVENT PANEL ================= */}
 
-function ContextRow({ label, value }) {
-  return <div className="context-row"><span>{label}</span><strong>{value}</strong></div>;
-}
+      {panelOpen && selectedEvent && (
 
-function Metric({ label, value }) {
-  return <div><span>{label}</span><strong>{value}</strong></div>;
-}
 
-function PrioritySignals({ events, onSelect }) {
-  return (
-    <div className="right-content">
-      <div className="right-heading">
-        <div><span className="eyebrow">PRIORITY QUEUE</span><h2>Signals requiring attention</h2></div>
-        <span className="queue-badge">{String(events.length).padStart(2, "0")}</span>
+
+
+
+        <aside className="event-panel">
+          <div className="risk-event-switcher">
+  <button
+    className="risk-switch-button"
+    onClick={() => changeRiskEvent(-1)}
+  >
+    ←
+  </button>
+
+  <div className="risk-event-counter">
+    <span>HIGH RISK EVENTS</span>
+    <strong>
+      {highRiskEvents.findIndex(
+        (event) => event.id === selectedEvent.id
+      ) + 1}
+      {" / "}
+      {highRiskEvents.length}
+    </strong>
+  </div>
+
+  <button
+    className="risk-switch-button"
+    onClick={() => changeRiskEvent(1)}
+  >
+    →
+  </button>
+</div>
+
+<div className="risk-summary-strip">
+  <div>
+    <span>HIGH RISK</span>
+    <strong>{highRiskEvents.length}</strong>
+  </div>
+
+  <div>
+    <span>ACTIVE</span>
+    <strong>{highRiskEvents.length}</strong>
+  </div>
+
+  <div>
+    <span>REGION</span>
+    <strong>INDIA</strong>
+  </div>
+</div>
+<div className="risk-list">
+  <div className="risk-list-title">
+    <span>ACTIVE HIGH-RISK EVENTS</span>
+    <small>{highRiskEvents.length} DETECTED</small>
+  </div>
+
+  {highRiskEvents.map((event) => (
+    <button
+      key={event.id}
+      className={`risk-event-card ${
+        selectedEvent?.id === event.id ? "selected" : ""
+      }`}
+      onClick={() => openRiskEvent(event)}
+    >
+      <div className="risk-event-dot"></div>
+
+      <div className="risk-event-card-main">
+        <div className="risk-event-card-top">
+          <strong>{event.id}</strong>
+          <span>HIGH</span>
+        </div>
+
+        <div className="risk-event-location">
+          {event.location}
+        </div>
+
+        <div className="risk-event-type">
+          {event.type}
+        </div>
+
+        <div className="risk-event-meta">
+          <span>{event.confidence}% CONF.</span>
+          <span>{event.persistence}</span>
+          <span>{event.distance}</span>
+        </div>
       </div>
-      <p className="right-intro">Sorted by thermal intensity, persistence, satellite confidence, infrastructure proximity and model confidence.</p>
 
-      <div className="priority-list">
-        {events.map((event, index) => {
-          const p = event.properties;
-          const color = riskColor(p.risk_level);
-          const [lon, lat] = event.geometry.coordinates;
-          return (
-            <button className="priority-card" key={`${lat}-${lon}-${index}`} onClick={() => onSelect(event)}>
-              <div className="priority-rank">{String(index + 1).padStart(2, "0")}</div>
-              <div className="priority-main">
-                <div className="priority-title"><i style={{ background: color, boxShadow: `0 0 9px ${color}` }} /><strong>{pretty(p.predicted_class)}</strong><b style={{ color }}>{number(p.risk_score)}</b></div>
-                <div className="priority-sub"><span>{p.risk_level}</span><span>FRP {number(p.frp)} MW</span><span>{p.landcover_name || "Unknown"}</span></div>
-                <div className="priority-location">{number(lat, 4)} N, {number(lon, 4)} E</div>
-              </div>
-              <span className="priority-arrow"><Icon name="arrow" size={14} /></span>
+      <div className="risk-event-arrow">→</div>
+    </button>
+  ))}
+</div>
+          {/* PANEL HEADER */}
+
+          <div className="panel-header">
+
+            <button
+              className="back-button"
+              onClick={closePanel}
+            >
+              ← Back to Events
             </button>
-          );
-        })}
-        {!events.length && <div className="empty-state"><strong>No matching signals</strong><span>Adjust the search or filters to restore the queue.</span></div>}
+
+            <button
+              className="close-button"
+              onClick={closePanel}
+            >
+              ×
+            </button>
+
+          </div>
+
+
+          {/* EVENT SWITCHER */}
+
+          <div className="event-switcher">
+
+            <button
+              onClick={() => changeEvent(-1)}
+            >
+              ←
+            </button>
+
+            <span>
+              {events.findIndex(
+                (event) =>
+                  event.id === selectedEvent.id
+              ) + 1}
+              {" / "}
+              {events.length}
+            </span>
+
+            <button
+              onClick={() => changeEvent(1)}
+            >
+              →
+            </button>
+
+          </div>
+
+
+          {/* RISK */}
+
+          <div className="risk-badge">
+            <span>●</span>
+            {selectedEvent.risk} RISK
+          </div>
+
+
+          <div className="event-id">
+            Event ID: {selectedEvent.id}
+          </div>
+
+
+          <h2>
+            {selectedEvent.location}
+          </h2>
+
+
+          <div className="coordinates">
+            {selectedEvent.lat.toFixed(4)}° N
+            {"  "}
+            {selectedEvent.lng.toFixed(4)}° E
+          </div>
+
+
+          {/* TABS */}
+
+          <div className="event-tabs">
+
+  {[
+    "Overview",
+    "Imagery",
+    "Timeline",
+    "Context",
+    "Facilities"
+  ].map((tab) => (
+
+    <button
+      key={tab}
+      className={activeTab === tab ? "active" : ""}
+      onClick={() => setActiveTab(tab)}
+    >
+      {tab}
+    </button>
+
+  ))}
+
+</div>
+
+
+          {/* METRICS */}
+
+          <div className="metrics-grid">
+
+            <div className="metric-card">
+              <span>◉</span>
+              <small>CONFIDENCE</small>
+              <strong>
+                {selectedEvent.confidence}%
+              </strong>
+            </div>
+
+            <div className="metric-card">
+              <span>♨</span>
+              <small>THERMAL INTENSITY</small>
+              <strong>
+                {selectedEvent.intensity}
+              </strong>
+            </div>
+
+            <div className="metric-card">
+              <span>◷</span>
+              <small>PERSISTENCE</small>
+              <strong>
+                {selectedEvent.persistence}
+              </strong>
+            </div>
+
+            <div className="metric-card">
+              <span>●</span>
+              <small>DISTANCE</small>
+              <strong>
+                {selectedEvent.distance}
+              </strong>
+            </div>
+
+          </div>
+
+
+          {/* EVENT TYPE */}
+
+          <div className="event-type-card">
+
+            <div className="fire-icon">
+              ♨
+            </div>
+
+            <div>
+              <small>EVENT TYPE</small>
+
+              <strong>
+                {selectedEvent.type}
+              </strong>
+
+              <p>
+                Likely facility-related
+                thermal source
+              </p>
+            </div>
+
+          </div>
+
+
+          {/* WHY */}
+
+          <section className="why-section">
+
+            <h3>
+              WHY THIS EVENT MATTERS
+            </h3>
+
+            <p>
+              {selectedEvent.reason}
+            </p>
+
+          </section>
+
+
+          {/* ACTIONS */}
+
+          <div className="action-buttons">
+
+            <button
+              className="investigate-button"
+              onClick={() => {
+                setActiveTab("Imagery");
+                setInvestigationOpen(true);
+              }}
+            >
+              🔍 View Full Investigation →
+            </button>
+
+            <button className="track-button">
+              ♧ Track This Event
+            </button>
+
+          </div>
+
+
+          {/* RELATED EVENTS */}
+
+          <section className="related-section">
+
+            <div className="section-title">
+              <span>RELATED EVENTS NEARBY</span>
+              <button>See All →</button>
+            </div>
+
+            <div className="related-events">
+
+              {events
+                .filter(
+                  (event) =>
+                    event.id !== selectedEvent.id
+                )
+                .slice(0, 3)
+                .map((event) => (
+
+                  <button
+                    key={event.id}
+                    className="related-card"
+                    onClick={() => openEvent(event)}
+                  >
+
+                    <div className="mini-map">
+                      ●
+                    </div>
+
+                    <div>
+                      <strong>
+                        {event.id}
+                      </strong>
+
+                      <span>
+                        {event.location}
+                      </span>
+
+                      <em
+                        className={
+                          event.risk === "HIGH"
+                            ? "high-text"
+                            : "medium-text"
+                        }
+                      >
+                        {event.risk}
+                      </em>
+                    </div>
+
+                    <span className="arrow">
+                      →
+                    </span>
+
+                  </button>
+
+                ))}
+
+            </div>
+
+          </section>
+
+
+          <div className="source">
+            Source: NASA FIRMS
+            <span>|</span>
+            Satellite Thermal Data
+          </div>
+
+        </aside>
+
+
+
+
+
+      )}
+      {investigationOpen && selectedEvent && (
+  <div className="investigation-screen">
+
+    {/* HEADER */}
+
+    <div className="investigation-header">
+
+      <button
+        className="investigation-back"
+        onClick={() => setInvestigationOpen(false)}
+      >
+        ← Back to Events
+      </button>
+
+      <div className="investigation-title">
+        <span>EVENT INVESTIGATION</span>
+        <strong>{selectedEvent.id}</strong>
       </div>
 
-      <div className="queue-summary">
-        <div><span>Queue health</span><strong>ACTIVE</strong></div>
-        <div className="queue-bars">{Array.from({ length: 14 }).map((_, index) => <i key={index} className={index < Math.min(14, events.length + 2) ? "on" : ""} />)}</div>
+      <div className="investigation-risk">
+        ● {selectedEvent.risk} RISK
+      </div>
+
+    </div>
+
+
+    {/* MAIN CONTENT */}
+
+    <div className="investigation-content">
+
+      {/* LEFT */}
+
+      <section className="investigation-left">
+        {activeTab === "Imagery" && (
+  <div className="tab-view">
+
+    <div className="tab-view-header">
+      <div>
+        <span>SATELLITE IMAGERY</span>
+        <h2>Thermal Observation</h2>
+      </div>
+
+      <small>NASA FIRMS</small>
+    </div>
+
+    <div className="real-map-wrapper">
+
+  <div className="map-top-bar">
+
+    <div>
+      <span>SATELLITE / GEOGRAPHIC VIEW</span>
+    </div>
+
+    <div className="map-source">
+      OSM
+    </div>
+
+  </div>
+
+  <EventMap event={selectedEvent} />
+
+  <div className="map-overlay-info">
+
+    <div className="map-status">
+      <span className="map-live-dot"></span>
+      EVENT DETECTION
+    </div>
+
+    <div className="map-coordinates-live">
+      {selectedEvent.lat.toFixed(4)}° N&nbsp;&nbsp;
+      {selectedEvent.lng.toFixed(4)}° E
+    </div>
+
+  </div>
+
+</div>
+
+    <div className="imagery-info">
+
+      <div>
+        <span>OBSERVATION SOURCE</span>
+        <strong>NASA FIRMS</strong>
+      </div>
+
+      <div>
+        <span>THERMAL INTENSITY</span>
+        <strong>{selectedEvent.intensity}</strong>
+      </div>
+
+      <div>
+        <span>CONFIDENCE</span>
+        <strong>{selectedEvent.confidence}%</strong>
+      </div>
+
+    </div>
+
+  </div>
+)}
+{activeTab === "Timeline" && (
+  <div className="tab-view">
+
+    <div className="tab-view-header">
+      <div>
+        <span>OBSERVATION HISTORY</span>
+        <h2>Event Timeline</h2>
+      </div>
+
+      <small>{selectedEvent.persistence}</small>
+    </div>
+
+    <div className="full-timeline">
+
+      <div className="timeline-event">
+        <div className="timeline-dot"></div>
+
+        <div>
+          <strong>
+            {new Date(selectedEvent.firstDetectedAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </strong>
+          <h3>First Detection</h3>
+          <p>
+            Initial thermal anomaly detected by {selectedEvent.satellite || "NASA FIRMS"}.
+          </p>
+        </div>
+      </div>
+
+      <div className="timeline-event">
+        <div className="timeline-dot"></div>
+
+        <div>
+          <strong>{selectedEvent.detectionCount}</strong>
+          <h3>Satellite Observations</h3>
+          <p>
+            {selectedEvent.detectionCount} observation
+            {selectedEvent.detectionCount === 1 ? "" : "s"} associated with this event.
+          </p>
+        </div>
+      </div>
+
+      <div className="timeline-event">
+        <div className="timeline-dot"></div>
+
+        <div>
+          <strong>{selectedEvent.persistence}</strong>
+          <h3>Estimated Persistence</h3>
+          <p>
+            Repeated thermal detections indicate an estimated activity episode over this period.
+          </p>
+        </div>
+      </div>
+
+      <div className="timeline-event">
+        <div className="timeline-dot latest"></div>
+
+        <div>
+          <strong>
+            {new Date(selectedEvent.lastDetectedAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </strong>
+          <h3>Latest Observation</h3>
+          <p>
+            Most recent satellite observation currently associated with this event.
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+)}
+{activeTab === "Context" && (
+  <div className="tab-view">
+
+    <div className="tab-view-header">
+      <div>
+        <span>GEOGRAPHIC ANALYSIS</span>
+        <h2>Environmental Context</h2>
+      </div>
+
+      <small>OSM + LAND COVER</small>
+    </div>
+
+    <div className="context-map">
+
+      <div className="context-grid"></div>
+
+      <div className="context-zone industrial-zone">
+        INDUSTRIAL
+      </div>
+
+      <div className="context-zone urban-zone">
+        URBAN
+      </div>
+
+      <div className="context-zone agricultural-zone">
+        AGRICULTURAL
+      </div>
+
+      <div className="context-hotspot">
+        ●
+      </div>
+
+    </div>
+
+    <div className="land-use">
+
+      <div className="land-row">
+        <span>Industrial / Power</span>
+        <div className="land-bar">
+          <i style={{ width: `${selectedEvent.industrialContext ? 100 : 20}%` }}></i>
+        </div>
+        <strong>{selectedEvent.industrialContext ? "YES" : "NO"}</strong>
+      </div>
+
+      <div className="land-row">
+        <span>Agricultural</span>
+        <div className="land-bar">
+          <i style={{ width: `${selectedEvent.agricultureContext ? 100 : 20}%` }}></i>
+        </div>
+        <strong>{selectedEvent.agricultureContext ? "YES" : "NO"}</strong>
+      </div>
+
+      <div className="land-row">
+        <span>Built-up</span>
+        <div className="land-bar">
+          <i style={{ width: `${selectedEvent.builtupContext ? 100 : 20}%` }}></i>
+        </div>
+        <strong>{selectedEvent.builtupContext ? "YES" : "NO"}</strong>
+      </div>
+
+      <div className="land-row">
+        <span>Land cover</span>
+        <div className="land-bar">
+          <i style={{ width: "100%" }}></i>
+        </div>
+        <strong>{selectedEvent.landcoverName}</strong>
+      </div>
+
+    </div>
+
+  </div>
+)}
+{activeTab === "Facilities" && (
+  <div className="tab-view">
+
+    <div className="tab-view-header">
+      <div>
+        <span>OPENSTREETMAP ANALYSIS</span>
+        <h2>Nearby Facilities</h2>
+      </div>
+
+      <small>OSM</small>
+    </div>
+
+    <div className="facility-list">
+
+      <div className="facility-item">
+
+        <div className="facility-icon">
+          🏭
+        </div>
+
+        <div>
+          <strong>
+            Industrial Facility
+          </strong>
+
+          <span>
+            Manufacturing / Processing
+          </span>
+        </div>
+
+        <b>
+          {selectedEvent.distance}
+        </b>
+
+      </div>
+
+
+      <div className="facility-item">
+
+        <div className="facility-icon">
+          🏭
+        </div>
+
+        <div>
+          <strong>
+            Processing Facility
+          </strong>
+
+          <span>
+            Industrial infrastructure
+          </span>
+        </div>
+
+        <b>
+          2.1 km
+        </b>
+
+      </div>
+
+
+      <div className="facility-item">
+
+        <div className="facility-icon">
+          ⚡
+        </div>
+
+        <div>
+          <strong>
+            Power Infrastructure
+          </strong>
+
+          <span>
+            Energy facility
+          </span>
+        </div>
+
+        <b>
+          3.4 km
+        </b>
+
+      </div>
+
+    </div>
+
+
+    <div className="facility-note">
+
+      <span>ⓘ</span>
+
+      <p>
+        Facility proximity is used as contextual
+        evidence in the risk assessment. It does
+        not independently confirm the cause of
+        the thermal anomaly.
+      </p>
+
+    </div>
+
+  </div>
+)}
+
+
+        {activeTab === "Overview" && (
+        <>
+        <div className="location-heading">
+
+          <div>
+            <span>THERMAL EVENT</span>
+
+            <h1>
+              {selectedEvent.location}
+            </h1>
+
+            <p>
+              {selectedEvent.lat.toFixed(4)}° N
+              {"  "}
+              {selectedEvent.lng.toFixed(4)}° E
+            </p>
+          </div>
+
+        </div>
+
+
+        {/* SATELLITE IMAGE */}
+
+        <div className="satellite-card">
+
+          <div className="card-heading">
+            <span>SATELLITE THERMAL OBSERVATION</span>
+
+            <small>
+              NASA FIRMS
+            </small>
+          </div>
+
+          <div className="satellite-placeholder">
+
+            <div className="satellite-grid"></div>
+
+            <div className="thermal-center">
+              <div className="thermal-ring"></div>
+              <div className="thermal-dot"></div>
+            </div>
+
+            <div className="map-label label-1">
+              INDUSTRIAL AREA
+            </div>
+
+            <div className="map-label label-2">
+              DETECTION
+            </div>
+
+            <div className="map-coordinates">
+              {selectedEvent.lat.toFixed(4)}° N
+              {"  "}
+              {selectedEvent.lng.toFixed(4)}° E
+            </div>
+
+          </div>
+
+        </div>
+
+
+        {/* TIMELINE */}
+
+        <div className="timeline-card">
+
+
+          <div className="card-heading">
+            <span>EVENT TIMELINE</span>
+
+            <small>
+              {selectedEvent.persistence}
+            </small>
+          </div>
+          <div className="timeline-replay">
+
+            <div className="replay-header">
+              <div>
+                <span>THERMAL OBSERVATION SEQUENCE</span>
+                <strong>EVENT REPLAY</strong>
+              </div>
+
+              <div className="replay-status">
+                <span className="replay-dot"></span>
+                {selectedEvent.persistence} OBSERVED
+              </div>
+            </div>
+
+            <div className="replay-track">
+
+              <div className="replay-line"></div>
+
+              <div className={`replay-step ${replayStep >= 1 ? "active" : ""}`}>
+                <div className="replay-point"></div>
+                <div className="replay-info">
+                  <strong>
+                    {new Date(selectedEvent.firstDetectedAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </strong>
+                  <span>DETECTION</span>
+                  <small>Initial thermal anomaly</small>
+                </div>
+              </div>
+
+              <div className={`replay-step ${replayStep >= 2 ? "active" : ""}`}>
+                <div className="replay-point"></div>
+                <div className="replay-info">
+                  <strong>{selectedEvent.detectionCount} OBS.</strong>
+                  <span>PERSISTENCE</span>
+                  <small>Thermal source remains associated with this event</small>
+                </div>
+              </div>
+
+              <div className={`replay-step ${replayStep >= 3 ? "active" : ""}`}>
+                <div className="replay-point"></div>
+                <div className="replay-info">
+                  <strong>{selectedEvent.intensity}</strong>
+                  <span>THERMAL INTENSITY</span>
+                  <small>Latest FIRMS FRP: {selectedEvent.frp.toFixed(2)} MW</small>
+                </div>
+              </div>
+
+              <div className={`replay-step ${replayStep >= 4 ? "active latest" : ""}`}>
+                <div className="replay-point"></div>
+                <div className="replay-info">
+                  <strong>
+                    {new Date(selectedEvent.lastDetectedAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </strong>
+                  <span>LATEST</span>
+                  <small>Most recent observation</small>
+                </div>
+              </div>
+
+            </div>
+
+            <div className="replay-controls">
+
+              <button
+                className="replay-button"
+                onClick={startReplay}
+                disabled={isReplaying}
+              >
+                {isReplaying ? "■" : "▶"}
+              </button>
+
+              <div className="replay-progress">
+                <div
+                  className="replay-progress-fill"
+                  style={{
+                    width: `${(replayStep / 4) * 100}%`,
+                  }}
+                ></div>
+              </div>
+
+              <span className="replay-time">
+                {replayStep <= 1 &&
+                  new Date(selectedEvent.firstDetectedAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                {replayStep === 2 && `${selectedEvent.detectionCount} OBS.`}
+                {replayStep === 3 && selectedEvent.intensity}
+                {replayStep === 4 &&
+                  new Date(selectedEvent.lastDetectedAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+              </span>
+
+            </div>
+
+          </div>
+
+          </div>
+
+        <div className="risk-explanation-card">
+  <div className="risk-explanation-header">
+    <div>
+      <span>MODEL ASSESSMENT</span>
+      <h3>WHY HIGH RISK?</h3>
+    </div>
+
+    <div className="risk-score">
+      <strong>{selectedEvent.risk}</strong>
+      <small>RISK LEVEL</small>
+    </div>
+  </div>
+
+  <div className="risk-factors">
+
+    <div className="risk-factor">
+      <div className="factor-icon">◉</div>
+
+      <div className="factor-content">
+        <div className="factor-title">
+          <span>THERMAL INTENSITY</span>
+          <strong>{selectedEvent.intensity}</strong>
+        </div>
+
+        <div className="factor-bar">
+          <div
+            className="factor-fill"
+            style={{
+              width:
+                selectedEvent.intensity === "HIGH"
+                  ? "92%"
+                  : "58%",
+            }}
+          ></div>
+        </div>
+
+        <p>
+          Strong thermal anomaly detected in satellite observation.
+        </p>
       </div>
     </div>
-  );
-}
 
-function EventDetail({ event, onClose }) {
-  const p = event.properties;
-  const [lon, lat] = event.geometry.coordinates;
-  const color = riskColor(p.risk_level);
-  const reasons = String(p.risk_reasons || "").split(";").map((x) => x.trim()).filter(Boolean);
-  const confidence = Number(p.prediction_confidence || 0) * 100;
 
-  return (
-    <div className="detail-content">
-      <div className="detail-top"><button onClick={onClose}><Icon name="arrow" size={15} /> Back to queue</button><span>EVENT INTELLIGENCE</span></div>
-      <div className="detail-title-row"><div><span className="eyebrow">THERMAL EVENT</span><h2>{pretty(p.predicted_class)}</h2><p>{number(lat, 5)} N, {number(lon, 5)} E</p></div><div className="risk-badge" style={{ color, borderColor: `${color}55`, background: `${color}12` }}><span>RISK</span><strong>{p.risk_level}</strong></div></div>
+    <div className="risk-factor">
+      <div className="factor-icon">◷</div>
 
-      <div className="score-panel" style={{ "--accent": color }}>
-        <div><span>GeoFlare risk score</span><strong>{number(p.risk_score)}</strong><small>/ 100</small></div>
-        <div className="score-ring"><svg viewBox="0 0 42 42"><circle cx="21" cy="21" r="16" /><circle className="ring-value" cx="21" cy="21" r="16" pathLength="100" style={{ strokeDasharray: `${Math.min(100, Number(p.risk_score || 0))} 100` }} /></svg></div>
+      <div className="factor-content">
+        <div className="factor-title">
+          <span>PERSISTENCE</span>
+          <strong>{selectedEvent.persistence}</strong>
+        </div>
+
+        <div className="factor-bar">
+          <div
+            className="factor-fill"
+            style={{
+              width:
+                parseFloat(selectedEvent.persistence) >= 4
+                  ? "88%"
+                  : "55%",
+            }}
+          ></div>
+        </div>
+
+        <p>
+          Repeated thermal observations increase event significance.
+        </p>
       </div>
+    </div>
 
-      <DetailSection title="AI classification">
-        <div className="class-result"><div><strong>{pretty(p.predicted_class)}</strong><span className={p.classification_status === "CLASSIFIED" ? "good" : "warn"}>{p.classification_status === "CLASSIFIED" ? "Classification available" : "Review recommended"}</span></div><b>{number(confidence, 0)}%</b></div>
-        <div className="confidence-track"><span style={{ width: `${Math.min(100, confidence)}%` }} /></div>
-        <div className="detail-pairs"><Pair label="Model hypothesis" value={pretty(p.model_predicted_class)} /><Pair label="Land cover" value={p.landcover_name || "Unknown"} /></div>
-      </DetailSection>
 
-      <DetailSection title="Thermal telemetry">
-        <div className="telemetry-grid"><Pair label="Fire radiative power" value={`${number(p.frp)} MW`} /><Pair label="Satellite confidence" value={`${number(Number(p.confidence_score || 0) * 100, 0)}%`} /><Pair label="Acquisition" value={p.acq_datetime || p.acq_date || "Unknown"} /><Pair label="Instrument" value={`${p.satellite || "VIIRS"} / ${p.instrument || "N/A"}`} /></div>
-      </DetailSection>
+    <div className="risk-factor">
+      <div className="factor-icon">⌖</div>
 
-      <DetailSection title="Geospatial context">
-        <div className="telemetry-grid"><Pair label="Industry distance" value={`${number(p.distance_to_industry_km)} km`} /><Pair label="Power distance" value={`${number(p.distance_to_power_km)} km`} /><Pair label="Oil / gas distance" value={`${number(p.distance_to_oil_gas_km)} km`} /><Pair label="Settlement distance" value={`${number(p.distance_to_settlement_km)} km`} /></div>
-      </DetailSection>
+      <div className="factor-content">
+        <div className="factor-title">
+          <span>FACILITY PROXIMITY</span>
+          <strong>{selectedEvent.distance}</strong>
+        </div>
 
-      <DetailSection title="Risk reasoning">
-        <div className="reason-list">{reasons.length ? reasons.map((reason, index) => <div key={`${reason}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span>{reason}</div>) : <div><span>--</span>No risk reasoning available.</div>}</div>
-      </DetailSection>
+        <div className="factor-bar">
+          <div
+            className="factor-fill"
+            style={{
+              width:
+                parseFloat(selectedEvent.distance) <= 1.5
+                  ? "94%"
+                  : "60%",
+            }}
+          ></div>
+        </div>
 
-      <div className="decision" style={{ borderColor: `${color}40` }}><div><span>DECISION STATUS</span><strong>{p.decision_status || "REVIEW_RECOMMENDED"}</strong></div><i style={{ background: color }} /></div>
+        <p>
+          Thermal source is located near mapped infrastructure.
+        </p>
+      </div>
+    </div>
+
+
+    <div className="risk-factor">
+      <div className="factor-icon">◎</div>
+
+      <div className="factor-content">
+        <div className="factor-title">
+          <span>CLASSIFICATION CONFIDENCE</span>
+          <strong>{selectedEvent.confidence}%</strong>
+        </div>
+
+        <div className="factor-bar">
+          <div
+            className="factor-fill"
+            style={{
+              width: `${selectedEvent.confidence}%`,
+            }}
+          ></div>
+        </div>
+
+        <p>
+          Model confidence based on available geographic and temporal evidence.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <div className="risk-conclusion">
+    <span>ASSESSMENT</span>
+    <p>
+      Multiple independent indicators support a
+      <strong> probable high-risk thermal event</strong>.
+    </p>
+  </div>
+</div>
+
+        </>
+        )}
+
+
+      </section>
+
+
+      {/* RIGHT */}
+
+      <section className="investigation-right">
+
+        {/* SUMMARY */}
+
+        <div className="investigation-card">
+
+          <div className="card-heading">
+            <span>EVENT SUMMARY</span>
+          </div>
+
+          <div className="summary-grid">
+
+            <div>
+              <small>CONFIDENCE</small>
+              <strong>
+                {selectedEvent.confidence}%
+              </strong>
+            </div>
+
+            <div>
+              <small>PERSISTENCE</small>
+              <strong>
+                {selectedEvent.persistence}
+              </strong>
+            </div>
+
+            <div>
+              <small>THERMAL INTENSITY</small>
+              <strong>
+                {selectedEvent.intensity}
+              </strong>
+            </div>
+
+            <div>
+              <small>FACILITY DISTANCE</small>
+              <strong>
+                {selectedEvent.distance}
+              </strong>
+            </div>
+
+          </div>
+
+        </div>
+
+
+        {/* CLASSIFICATION */}
+
+        <div className="investigation-card">
+
+          <div className="card-heading">
+            <span>AI CLASSIFICATION</span>
+          </div>
+
+          <div className="classification">
+
+            <div className="classification-icon">
+              ♨
+            </div>
+
+            <div>
+
+              <strong>
+                {selectedEvent.type}
+              </strong>
+
+              <p>
+                {selectedEvent.classificationStatus === "CLASSIFIED"
+                  ? `Model classification confidence: ${selectedEvent.confidence}%`
+                  : "Classification requires review"}
+              </p>
+
+            </div>
+
+            <div className="classification-score">
+              {selectedEvent.confidence}%
+            </div>
+
+          </div>
+
+        </div>
+
+
+        {/* WHY HIGH RISK */}
+
+        <div className="investigation-card why-high-risk">
+
+          <div className="card-heading">
+            <span>WHY HIGH RISK?</span>
+          </div>
+
+          <div className="evidence-list">
+
+            <div className="evidence-item">
+              <span>✓</span>
+              <div>
+                <strong>Persistent signal</strong>
+                <small>
+                  Detected repeatedly over
+                  {selectedEvent.persistence}
+                </small>
+              </div>
+            </div>
+
+            <div className="evidence-item">
+              <span>✓</span>
+              <div>
+                <strong>Industrial proximity</strong>
+                <small>
+                  Nearest facility:
+                  {selectedEvent.distance}
+                </small>
+              </div>
+            </div>
+
+            <div className="evidence-item">
+              <span>✓</span>
+              <div>
+                <strong>High thermal intensity</strong>
+                <small>
+                  Satellite observation classified
+                  as high intensity
+                </small>
+              </div>
+            </div>
+
+            <div className="evidence-item">
+              <span>✓</span>
+              <div>
+                <strong>Multiple observations</strong>
+                <small>
+                  Consistent thermal detections
+                  strengthen the assessment
+                </small>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+
+        {/* CONTEXT */}
+
+        <div className="investigation-card">
+
+          <div className="card-heading">
+            <span>GEOGRAPHIC CONTEXT</span>
+          </div>
+
+          <div className="context-list">
+
+            <div>
+              <span>Land context</span>
+              <strong>{selectedEvent.landcoverName}</strong>
+            </div>
+
+            <div>
+              <span>Nearest facility</span>
+              <strong>
+                {selectedEvent.facility}
+              </strong>
+            </div>
+
+            <div>
+              <span>Distance</span>
+              <strong>
+                {selectedEvent.distance}
+              </strong>
+            </div>
+
+            <div>
+              <span>Source</span>
+              <strong>NASA FIRMS</strong>
+            </div>
+
+          </div>
+
+        </div>
+
+
+        {/* ACTIONS */}
+
+        <div className="investigation-actions">
+
+          <button className="track-large">
+            ♧ Track This Event
+          </button>
+
+          <button
+            className="return-large"
+            onClick={() => setInvestigationOpen(false)}
+          >
+            ← Return to Events
+          </button>
+
+        </div>
+
+      </section>
+
+    </div>
+
+
+    {/* FOOTER */}
+
+    <div className="investigation-footer">
+
+      <span>
+        AGNI DRISHTI
+      </span>
+
+      <span>
+        Decision-support assessment •
+        Satellite-derived thermal observation
+      </span>
+
+      <span>
+        Source: NASA FIRMS
+      </span>
+
+    </div>
+
+  </div>
+)}
+
+
+      {dashboardView !== "global" && !panelOpen && (
+        <aside className="dashboard-panel">
+          <div className="dashboard-panel-header">
+            <div>
+              <span>GEOSPATIAL THERMAL INTELLIGENCE</span>
+              <h2>
+                {dashboardView === "facilities" && "Facilities"}
+                {dashboardView === "analytics" && "Analytics"}
+                {dashboardView === "reports" && "Reports"}
+              </h2>
+            </div>
+
+            <button
+              className="dashboard-panel-close"
+              onClick={() => setDashboardView("global")}
+              aria-label="Close section"
+            >
+              ×
+            </button>
+          </div>
+
+          {dashboardView === "facilities" && (
+            <div className="dashboard-panel-content">
+              <div className="dashboard-panel-summary">
+                <strong>OSM CONTEXT</strong>
+                <span>Infrastructure proximity associated with active thermal events.</span>
+              </div>
+
+              {events
+                .slice()
+                .sort((a, b) => a.distanceToIndustryKm - b.distanceToIndustryKm)
+                .slice(0, 8)
+                .map((event) => (
+                  <button
+                    key={event.id}
+                    className="dashboard-data-row"
+                    onClick={() => openEvent(event)}
+                  >
+                    <div>
+                      <strong>{event.id}</strong>
+                      <span>{event.type}</span>
+                    </div>
+                    <div>
+                      <b>{formatDistance(event.distanceToIndustryKm)}</b>
+                      <small>INDUSTRY</small>
+                    </div>
+                  </button>
+                ))}
+            </div>
+          )}
+
+          {dashboardView === "analytics" && (
+            <div className="dashboard-panel-content">
+              <div className="analytics-grid">
+                <div>
+                  <span>ACTIVE EVENTS</span>
+                  <strong>{events.length}</strong>
+                </div>
+                <div>
+                  <span>HIGH RISK</span>
+                  <strong>{highRiskEvents.length}</strong>
+                </div>
+                <div>
+                  <span>PERSISTENT</span>
+                  <strong>{events.filter((event) => event.persistenceDays >= 1).length}</strong>
+                </div>
+                <div>
+                  <span>CLASSIFIED</span>
+                  <strong>{events.filter((event) => event.classificationStatus === "CLASSIFIED").length}</strong>
+                </div>
+              </div>
+
+              <div className="dashboard-panel-summary">
+                <strong>CLASSIFICATION DISTRIBUTION</strong>
+                <span>
+                  Current active-event classifications from the GeoFlare ML pipeline.
+                </span>
+              </div>
+
+              {[
+                ["Industrial Fire", "industrial_fire"],
+                ["Natural Fire", "natural_fire"],
+                ["Agricultural Burning", "agricultural_burning"],
+                ["Persistent Thermal Source", "persistent_thermal_source"],
+                ["Uncertain", "uncertain"],
+              ].map(([label, value]) => {
+                const count = events.filter(
+                  (event) => event.modelPredictedClass === value
+                ).length;
+                const percentage = events.length
+                  ? Math.round((count / events.length) * 100)
+                  : 0;
+
+                return (
+                  <div className="analytics-row" key={value}>
+                    <div>
+                      <span>{label}</span>
+                      <strong>{count}</strong>
+                    </div>
+                    <div className="analytics-bar">
+                      <i style={{ width: `${percentage}%` }}></i>
+                    </div>
+                    <small>{percentage}%</small>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {dashboardView === "reports" && (
+            <div className="dashboard-panel-content">
+              <div className="report-card">
+                <span>LIVE DATASET</span>
+                <strong>NASA FIRMS + OSM + WorldCover</strong>
+                <p>
+                  Active thermal event intelligence currently available through the GeoFlare API.
+                </p>
+              </div>
+
+              <div className="report-card">
+                <span>EVENT COVERAGE</span>
+                <strong>{events.length} active event episodes</strong>
+                <p>
+                  Each event is associated with satellite observations and spatial context.
+                </p>
+              </div>
+
+              <div className="report-card">
+                <span>MODEL STATUS</span>
+                <strong>
+                  {events.filter((event) => event.classificationStatus === "CLASSIFIED").length} classified
+                </strong>
+                <p>
+                  Classification status is based on the configured model confidence threshold.
+                </p>
+              </div>
+
+              <div className="report-note">
+                Decision-support assessment. Satellite-derived observations do not independently confirm fire cause.
+              </div>
+            </div>
+          )}
+        </aside>
+      )}
+
+      {/* ================= BOTTOM STATS ================= */}
+
+      {!panelOpen && dashboardView === "global" && (
+
+        <div className="bottom-stats">
+
+          <div className="stat-card">
+            <span>ACTIVE EVENTS</span>
+            <strong>127</strong>
+            <small>+12% vs last 24h</small>
+          </div>
+
+          <div className="stat-card">
+            <span>HIGH RISK</span>
+            <strong>09</strong>
+            <small>+3 vs last 24h</small>
+          </div>
+
+          <div className="stat-card">
+            <span>PERSISTENT</span>
+            <strong>18</strong>
+            <small>+5 vs last 24h</small>
+          </div>
+
+          <div className="stat-card">
+            <span>INDUSTRIAL</span>
+            <strong>34</strong>
+            <small>+8 vs last 24h</small>
+          </div>
+
+        </div>
+
+      )}
+
+
+      {/* INSTRUCTIONS */}
+
+      {!panelOpen && dashboardView === "global" && (
+
+        <div className="instructions">
+          Drag to rotate • Scroll to explore • Click an event
+        </div>
+
+      )}
+
     </div>
   );
-}
-
-function DetailSection({ title, children }) {
-  return <section className="detail-section"><div className="detail-section-title">{title}</div>{children}</section>;
-}
-
-function Pair({ label, value }) {
-  return <div className="pair"><span>{label}</span><strong>{value || "--"}</strong></div>;
 }
 
 export default App;

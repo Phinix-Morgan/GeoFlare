@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -8,15 +10,15 @@ class GeoFlareEvent(BaseModel):
     latitude: float
     longitude: float
 
-    first_detected_at: str
-    last_detected_at: str
+    first_detected_at: datetime
+    last_detected_at: datetime
 
     detection_count: int
     persistence_days: float
 
     acq_date: str
     acq_time: int
-    acq_datetime: str
+    acq_datetime: datetime
 
     satellite: str
     instrument: str

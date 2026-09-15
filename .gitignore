@@ -11,3 +11,7 @@ backend/data/*
 *.log
 
 .DS_Store
+
+# Local backups
+backups/
+frontend_old/
