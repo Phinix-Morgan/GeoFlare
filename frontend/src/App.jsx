@@ -633,6 +633,47 @@ const changeRiskEvent = (direction) => {
     };
   }, []);
 
+<<<<<<< HEAD
+=======
+  useEffect(() => {
+    if (!globeRef.current) return;
+
+    globeRef.current.pointOfView(
+      {
+        lat: 22.5,
+        lng: 79,
+        altitude: 1.75
+      },
+      1200
+    );
+
+    const controls = globeRef.current.controls();
+
+    controls.enableZoom = true;
+    controls.enablePan = false;
+    controls.autoRotate = false;
+    controls.rotateSpeed = 0.35;
+    controls.zoomSpeed = 0.72;
+    controls.dampingFactor = 0.12;
+    controls.minDistance = 120;
+    controls.maxDistance = 420;
+    controls.enableDamping = true;
+  }, []);
+
+  const focusEvent = (event) => {
+    if (!globeRef.current) return;
+
+    globeRef.current.pointOfView(
+      {
+        lat: event.lat,
+        lng: event.lng,
+        altitude: panelOpen ? 1.05 : 1.25
+      },
+      900
+    );
+  };
+
+>>>>>>> 30520fd8357f3b853a2c46bff57503d81a2d538c
   const openEvent = (event) => {
     setSelectedEvent(event);
     setPanelOpen(true);
@@ -785,10 +826,86 @@ const changeRiskEvent = (direction) => {
           </div>
         )}
 
+<<<<<<< HEAD
         <IndiaRiskMap
           events={events}
           selectedEvent={selectedEvent}
           onSelectEvent={openEvent}
+=======
+        <Globe
+          ref={globeRef}
+
+          width={globeWidth}
+          height={screenWidth < 900 ? window.innerHeight - 80 : window.innerHeight}
+
+          backgroundColor="#070b10"
+
+          rendererConfig={{
+            antialias: true,
+            alpha: false,
+            powerPreference: "high-performance",
+          }}
+
+          showAtmosphere={true}
+          atmosphereColor="#6ab2ff"
+          atmosphereAltitude={0.18}
+
+          globeImageUrl="https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+
+          bumpImageUrl="https://threejs.org/examples/textures/planets/earth_normal_2048.jpg"
+
+          bumpScale={0.08}
+
+          pointsData={events}
+
+          pointLat="lat"
+          pointLng="lng"
+
+          pointColor={(event) => {
+            if (event.risk === "HIGH") return "#8f1d2c";
+            if (event.risk === "MEDIUM") return "#c65d08";
+            return "#f3df82";
+          }}
+
+          pointAltitude={0.025}
+
+          pointRadius={(event) =>
+            event.risk === "HIGH"
+              ? 0.13
+              : 0.09
+          }
+
+          pointResolution={48}
+
+          pointsMerge={false}
+
+          pointLabel={(event) => `
+            <div class="globe-tooltip">
+              <strong>${event.location}</strong>
+              <br/>
+              ${event.risk} RISK
+              <br/>
+              ${event.type}
+            </div>
+          `}
+
+          onPointClick={openEvent}
+
+          ringsData={events.filter(
+            (event) => event.risk === "HIGH"
+          )}
+
+          ringLat="lat"
+          ringLng="lng"
+
+          ringColor="#8f1d2c"
+
+          ringMaxRadius={2.2}
+
+          ringPropagationSpeed={1.4}
+
+          ringRepeatPeriod={1400}
+>>>>>>> 30520fd8357f3b853a2c46bff57503d81a2d538c
         />
 
 
