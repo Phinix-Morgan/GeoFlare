@@ -47,15 +47,15 @@ class GeoFlarePipeline:
                 o.frp,
                 o.confidence_score,
 
-                e.predicted_class,
-                e.predicted_class AS model_predicted_class,
-                e.prediction_confidence,
-                e.classification_status,
+                COALESCE(e.predicted_class, 'uncertain') AS predicted_class,
+                COALESCE(e.predicted_class, 'uncertain') AS model_predicted_class,
+                COALESCE(e.prediction_confidence, 0) AS prediction_confidence,
+                COALESCE(e.classification_status, 'PENDING') AS classification_status,
 
-                e.risk_score,
-                e.risk_level,
-                e.decision_status,
-                e.risk_reasons,
+                COALESCE(e.risk_score, 0) AS risk_score,
+                COALESCE(e.risk_level, 'LOW') AS risk_level,
+                COALESCE(e.decision_status, 'PENDING') AS decision_status,
+                COALESCE(e.risk_reasons, 'Awaiting event intelligence processing.') AS risk_reasons,
 
                 COALESCE(
                     e.intelligence_features ->> 'landcover_name',

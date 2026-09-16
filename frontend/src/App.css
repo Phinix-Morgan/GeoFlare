@@ -349,6 +349,14 @@ button {
   font-weight: 500;
 }
 
+.event-locality {
+  margin-top: 4px;
+
+  color: #a7b2bc;
+
+  font-size: 13px;
+}
+
 .coordinates {
   margin-top: 6px;
 
@@ -2703,10 +2711,9 @@ button:focus-visible {
 
 .globe-section {
   top: 82px;
+  background: #dbe8e8;
   background:
-    radial-gradient(circle at 50% 48%, rgba(20,55,88,.22), transparent 42%),
-    radial-gradient(circle at 50% 100%, rgba(7,27,48,.18), transparent 48%),
-    #03070c;
+    #dbe8e8;
 }
 
 .globe-section.panel-mode {
@@ -2718,7 +2725,7 @@ button:focus-visible {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 46%, transparent 44%, rgba(0,3,8,.42) 100%);
+  background: linear-gradient(180deg, rgba(4,10,15,.04), rgba(4,10,15,.14));
   z-index: 2;
 }
 
@@ -2906,10 +2913,11 @@ button:focus-visible {
 .india-risk-map-wrap {
   position: relative;
   width: 100%;
-  min-height: 540px;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
-  border: 1px solid rgba(255,255,255,.09);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 0;
   background: #101820;
   box-shadow: 0 18px 60px rgba(0,0,0,.20);
 }
@@ -2967,7 +2975,8 @@ button:focus-visible {
 }
 
 .legend-high,
-.legend-medium {
+.legend-medium,
+.legend-low {
   width: 6px;
   height: 6px;
   display: inline-block;
@@ -2980,14 +2989,144 @@ button:focus-visible {
 }
 
 .legend-medium {
-  background: #ffad45;
-  box-shadow: 0 0 7px rgba(255,173,69,.55);
+  background: #ff9f43;
+  box-shadow: 0 0 7px rgba(255,159,67,.7);
+}
+
+.legend-low {
+  background: #f5e58a;
+  box-shadow: 0 0 7px rgba(245,229,138,.65);
 }
 
 .india-risk-map {
   width: 100%;
-  height: 540px;
+  height: 100%;
   background: #18232a;
+}
+
+.india-risk-marker {
+  background: transparent !important;
+  border: 0 !important;
+}
+
+.india-marker-shell {
+  width: 25px;
+  height: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: transform .18s ease;
+}
+
+.india-marker-shell:hover {
+  transform: scale(1.25);
+}
+
+.india-marker-shell.high {
+  background: rgba(255,55,48,.22);
+  border: 2px solid #ef3e39;
+  box-shadow: 0 0 0 5px rgba(255,62,55,.13), 0 0 20px rgba(255,62,55,.75);
+}
+
+.india-marker-shell.medium {
+  width: 19px;
+  height: 19px;
+  background: rgba(255,159,67,.25);
+  border: 2px solid #ff9f43;
+  box-shadow: 0 0 0 4px rgba(255,159,67,.12), 0 0 16px rgba(255,159,67,.7);
+}
+
+.india-marker-shell.low {
+  width: 15px;
+  height: 15px;
+  background: rgba(245,229,138,.25);
+  border: 2px solid #f5e58a;
+  box-shadow: 0 0 0 3px rgba(245,229,138,.1), 0 0 13px rgba(245,229,138,.6);
+}
+
+.india-marker-core {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.india-marker-shell.high .india-marker-core {
+  background: #ff5148;
+  box-shadow: 0 0 10px #ff5148;
+}
+
+.india-marker-shell.medium .india-marker-core {
+  width: 5px;
+  height: 5px;
+  background: #ffd09a;
+  box-shadow: 0 0 8px #ff9f43;
+}
+
+.india-marker-shell.low .india-marker-core {
+  width: 4px;
+  height: 4px;
+  background: #fff6c4;
+  box-shadow: 0 0 7px #f5e58a;
+}
+
+.hotspot-tooltip-wrap {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.hotspot-tooltip-wrap::before {
+  border-top-color: #101a22 !important;
+}
+
+.hotspot-tooltip {
+  min-width: 170px;
+  padding: 11px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 8px;
+  background: rgba(10,17,23,.96);
+  box-shadow: 0 12px 32px rgba(0,0,0,.38);
+  color: #eaf0f2;
+}
+
+.hotspot-tooltip strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hotspot-tooltip span,
+.hotspot-tooltip small {
+  color: #93a0aa;
+  font-size: 9px;
+}
+
+.hotspot-tooltip b {
+  width: fit-content;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 8px;
+  letter-spacing: .8px;
+}
+
+.hotspot-tooltip b.high {
+  color: #ff827a;
+  background: rgba(255,62,55,.15);
+}
+
+.hotspot-tooltip b.medium {
+  color: #ffc27d;
+  background: rgba(255,159,67,.14);
+}
+
+.hotspot-tooltip b.low {
+  color: #fff0a8;
+  background: rgba(245,229,138,.14);
 }
 
 /* Leaflet visual treatment */
@@ -3897,6 +4036,138 @@ button:focus-visible {
   color: #7d8992;
   font-size: 8px;
   line-height: 1.55;
+}
+
+/* Light dashboard theme */
+:root {
+  --dashboard-blush: #cfceaf;
+  --dashboard-ink: #111111;
+  --dashboard-muted: #4b4141;
+  --dashboard-border: rgba(17, 17, 17, 0.18);
+}
+
+body,
+.app {
+  background: var(--dashboard-blush) !important;
+  color: var(--dashboard-ink) !important;
+}
+
+.topbar,
+.event-panel,
+.dashboard-panel {
+  background: var(--dashboard-blush) !important;
+  color: var(--dashboard-ink) !important;
+  border-color: var(--dashboard-border) !important;
+  box-shadow: 0 12px 34px rgba(72, 38, 38, 0.16) !important;
+}
+
+.topbar {
+  backdrop-filter: none;
+  border-bottom: 0 !important;
+  z-index: 1000;
+}
+
+.navigation {
+  position: relative;
+  z-index: 1;
+}
+
+.brand h1,
+.brand p,
+.nav-button,
+.nav-button.active,
+.live-status,
+.event-panel h2,
+.event-panel strong,
+.event-panel p,
+.event-panel span,
+.event-panel small,
+.dashboard-panel h2,
+.dashboard-panel strong,
+.dashboard-panel p,
+.dashboard-panel span,
+.dashboard-panel small {
+  color: var(--dashboard-ink) !important;
+}
+
+.brand h1 {
+  font-size: 28px !important;
+}
+
+.brand p,
+.live-status,
+.nav-button {
+  font-size: 15px !important;
+}
+
+.nav-button:hover,
+.nav-button.active {
+  color: var(--dashboard-ink) !important;
+  background: rgba(255, 255, 255, 0.42) !important;
+  border-color: rgba(17, 17, 17, 0.32) !important;
+}
+
+.event-panel,
+.dashboard-panel {
+  font-size: 15px;
+}
+
+.event-panel h2 {
+  font-size: 30px !important;
+}
+
+.event-id,
+.coordinates,
+.event-locality,
+.back-button,
+.event-tabs button,
+.risk-event-location,
+.risk-event-type,
+.risk-event-meta,
+.source {
+  color: var(--dashboard-muted) !important;
+  font-size: 14px !important;
+}
+
+.event-tabs,
+.metric-card,
+.event-type-card,
+.why-section,
+.related-card,
+.risk-event-card,
+.risk-summary-strip,
+.risk-event-switcher {
+  background: rgba(255, 255, 255, 0.36) !important;
+  border-color: var(--dashboard-border) !important;
+}
+
+.metric-card strong,
+.risk-event-card strong,
+.risk-summary-strip strong {
+  color: var(--dashboard-ink) !important;
+  font-size: 18px !important;
+}
+
+.metric-card small,
+.risk-event-card-top span,
+.risk-list-title,
+.risk-event-counter span,
+.risk-summary-strip span {
+  color: var(--dashboard-muted) !important;
+  font-size: 12px !important;
+}
+
+.close-button,
+.event-switcher button,
+.risk-switch-button,
+.back-button {
+  color: var(--dashboard-ink) !important;
+}
+
+.instructions {
+  color: var(--dashboard-ink) !important;
+  background: rgba(255, 255, 255, 0.55) !important;
+  font-size: 15px !important;
 }
 
 @media (max-width: 700px) {

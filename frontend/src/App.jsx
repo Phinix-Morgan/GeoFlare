@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from "react";
-import Globe from "react-globe.gl";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
@@ -51,6 +50,9 @@ function mapBackendEvent(event) {
     lat: Number(event.latitude),
     lng: Number(event.longitude),
     location: "India",
+    city: "",
+    state: "",
+    country: "India",
     type: formatEventType(event.predicted_class),
     risk: event.risk_level || "LOW",
     confidence: Math.round(Number(event.prediction_confidence || 0) * 100),
@@ -318,7 +320,18 @@ function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
       attributionControl: true,
       minZoom: 4,
       maxZoom: 12,
-    }).setView([22.5, 79], 5);
+      maxBounds: L.latLngBounds(
+        [5.5, 66.5],
+        [38.5, 100]
+      ),
+      maxBoundsViscosity: 1,
+    }).fitBounds(
+      [
+        [6.5, 68],
+        [37.2, 97.5],
+      ],
+      { padding: [18, 18] }
+    );
 
     mapRef.current = map;
 
@@ -327,14 +340,17 @@ function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
       attribution: "&copy; OpenStreetMap contributors",
     }).addTo(map);
 
-    events.forEach((event) => {
+    events
+      .filter((event) => ["HIGH", "MEDIUM", "LOW"].includes(event.risk))
+      .forEach((event) => {
+      const riskClass = event.risk.toLowerCase();
       const isHigh = event.risk === "HIGH";
       const isSelected = selectedEvent?.id === event.id;
 
       const icon = L.divIcon({
         className: "india-risk-marker",
         html: `
-          <div class="india-marker-shell ${isHigh ? "high" : "medium"} ${isSelected ? "selected" : ""}">
+          <div class="india-marker-shell ${riskClass} ${isSelected ? "selected" : ""}">
             <div class="india-marker-core"></div>
           </div>
         `,
@@ -348,11 +364,32 @@ function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
       })
         .addTo(map)
         .bindTooltip(
-          `<strong>${event.id}</strong><br/>${event.location}<br/>${event.risk} RISK`,
-          { direction: "top", offset: [0, -15] }
+          `<div class="hotspot-tooltip">
+            <strong>${event.location}</strong>
+            <span>${event.id} · ${event.type}</span>
+            <b class="${riskClass}">${event.risk} RISK</b>
+            <small>${event.lat.toFixed(4)}° N, ${event.lng.toFixed(4)}° E</small>
+          </div>`,
+          {
+            direction: "top",
+            offset: [0, -16],
+            opacity: 1,
+            sticky: true,
+            className: "hotspot-tooltip-wrap",
+          }
         );
 
-      marker.on("click", () => onSelectEvent(event));
+      marker.on("click", () => {
+        map.flyTo(
+          [event.lat, event.lng],
+          14,
+          {
+            duration: 1.4,
+            easeLinearity: 0.18,
+          }
+        );
+        onSelectEvent(event);
+      });
 
       if (isHigh) {
         L.circle([event.lat, event.lng], {
@@ -380,8 +417,11 @@ function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
 
     mapRef.current.flyTo(
       [selectedEvent.lat, selectedEvent.lng],
-      7,
-      { duration: 1.1 }
+      14,
+      {
+        duration: 1.4,
+        easeLinearity: 0.18,
+      }
     );
   }, [selectedEvent]);
 
@@ -396,6 +436,7 @@ function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
         <div className="india-map-legend">
           <span><i className="legend-high"></i> HIGH</span>
           <span><i className="legend-medium"></i> MEDIUM</span>
+          <span><i className="legend-low"></i> LOW</span>
         </div>
       </div>
 
@@ -410,8 +451,6 @@ function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
 }
 
 function App() {
-  const globeRef = useRef();
-
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [investigationOpen, setInvestigationOpen] = useState(false);
@@ -423,6 +462,7 @@ function App() {
   const [screenWidth, setScreenWidth] = useState(window.innerWidth);
   const [replayStep, setReplayStep] = useState(4);
   const [isReplaying, setIsReplaying] = useState(false);
+  const geocodeCache = useRef(new Map());
 
 
     const highRiskEvents = events.filter(
@@ -481,22 +521,66 @@ function App() {
     }
   }, [events, selectedEvent]);
 
+  useEffect(() => {
+    if (!selectedEvent || !Number.isFinite(selectedEvent.lat) || !Number.isFinite(selectedEvent.lng)) {
+      return undefined;
+    }
+
+    const cacheKey = `${selectedEvent.lat.toFixed(4)},${selectedEvent.lng.toFixed(4)}`;
+    const cachedAddress = geocodeCache.current.get(cacheKey);
+
+    if (cachedAddress) {
+      setSelectedEvent((currentEvent) =>
+        currentEvent?.id === selectedEvent.id
+          ? { ...currentEvent, ...cachedAddress }
+          : currentEvent
+      );
+      return undefined;
+    }
+
+    const controller = new AbortController();
+
+    fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${selectedEvent.lat}&lon=${selectedEvent.lng}&zoom=10`,
+      {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      }
+    )
+      .then((response) => {
+        if (!response.ok) throw new Error("Reverse geocoding failed");
+        return response.json();
+      })
+      .then((result) => {
+        const address = result.address || {};
+        const locality = {
+          city: address.city || address.town || address.village || address.municipality || "",
+          state: address.state || address.region || "",
+          country: address.country || selectedEvent.country || "India",
+        };
+
+        geocodeCache.current.set(cacheKey, locality);
+        setSelectedEvent((currentEvent) =>
+          currentEvent?.id === selectedEvent.id
+            ? { ...currentEvent, ...locality }
+            : currentEvent
+        );
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") {
+          console.warn("Unable to resolve event locality:", error);
+        }
+      });
+
+    return () => controller.abort();
+  }, [selectedEvent?.id, selectedEvent?.lat, selectedEvent?.lng]);
+
   const openRiskEvent = (event) => {
     if (!event) return;
   setSelectedEvent(event);
   setPanelOpen(true);
   setActiveTab("Overview");
 
-  if (globeRef.current) {
-    globeRef.current.pointOfView(
-      {
-        lat: event.lat,
-        lng: event.lng,
-        altitude: 1.35,
-      },
-      900
-    );
-  }
 };
 
 const changeRiskEvent = (direction) => {
@@ -549,44 +633,9 @@ const changeRiskEvent = (direction) => {
     };
   }, []);
 
-  useEffect(() => {
-    if (!globeRef.current) return;
-
-    globeRef.current.pointOfView(
-      {
-        lat: 22.5,
-        lng: 79,
-        altitude: 1.75
-      },
-      1200
-    );
-
-    globeRef.current.controls().enableZoom = true;
-    globeRef.current.controls().enablePan = false;
-    globeRef.current.controls().autoRotate = false;
-    globeRef.current.controls().rotateSpeed = 0.35;
-  }, []);
-
-  const focusEvent = (event) => {
-    if (!globeRef.current) return;
-
-    globeRef.current.pointOfView(
-      {
-        lat: event.lat,
-        lng: event.lng,
-        altitude: panelOpen ? 1.05 : 1.25
-      },
-      900
-    );
-  };
-
   const openEvent = (event) => {
     setSelectedEvent(event);
     setPanelOpen(true);
-
-    setTimeout(() => {
-      focusEvent(event);
-    }, 100);
   };
 
   const openRiskEvents = () => {
@@ -604,19 +653,6 @@ const changeRiskEvent = (direction) => {
   const closePanel = () => {
     setPanelOpen(false);
     setSelectedEvent(null);
-
-    setTimeout(() => {
-      if (!globeRef.current) return;
-
-      globeRef.current.pointOfView(
-        {
-          lat: 22.5,
-          lng: 79,
-          altitude: 1.75
-        },
-        1000
-      );
-    }, 100);
   };
 
   const changeEvent = (direction) => {
@@ -641,9 +677,6 @@ const changeRiskEvent = (direction) => {
 
     setSelectedEvent(nextEvent);
 
-    setTimeout(() => {
-      focusEvent(nextEvent);
-    }, 50);
   };
 
   const focusIndia = () => {
@@ -651,21 +684,7 @@ const changeRiskEvent = (direction) => {
     setSelectedEvent(null);
     setDashboardView("global");
 
-    if (!globeRef.current) return;
-
-    globeRef.current.pointOfView(
-      {
-        lat: 22.5,
-        lng: 79,
-          altitude: 1.75
-      },
-      1000
-    );
   };
-
-  const globeWidth = panelOpen
-    ? screenWidth * 0.62
-    : screenWidth;
 
   return (
     <div className="app">
@@ -766,72 +785,10 @@ const changeRiskEvent = (direction) => {
           </div>
         )}
 
-        <Globe
-          ref={globeRef}
-
-          width={globeWidth}
-          height={screenWidth < 900 ? window.innerHeight - 80 : window.innerHeight}
-
-          backgroundColor="#070b10"
-
-          globeImageUrl="https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
-
-          bumpImageUrl="https://threejs.org/examples/textures/planets/earth_normal_2048.jpg"
-
-          bumpScale={0.08}
-
-          atmosphereColor="#315d7d"
-          atmosphereAltitude={0.12}
-
-          pointsData={events}
-
-          pointLat="lat"
-          pointLng="lng"
-
-          pointColor={(event) => {
-            if (event.risk === "HIGH") return "#8f1d2c";
-            if (event.risk === "MEDIUM") return "#c65d08";
-            return "#f3df82";
-          }}
-
-          pointAltitude={0.025}
-
-          pointRadius={(event) =>
-            event.risk === "HIGH"
-              ? 0.13
-              : 0.09
-          }
-
-          pointResolution={24}
-
-          pointsMerge={false}
-
-          pointLabel={(event) => `
-            <div class="globe-tooltip">
-              <strong>${event.location}</strong>
-              <br/>
-              ${event.risk} RISK
-              <br/>
-              ${event.type}
-            </div>
-          `}
-
-          onPointClick={openEvent}
-
-          ringsData={events.filter(
-            (event) => event.risk === "HIGH"
-          )}
-
-          ringLat="lat"
-          ringLng="lng"
-
-          ringColor="#8f1d2c"
-
-          ringMaxRadius={2.2}
-
-          ringPropagationSpeed={1.4}
-
-          ringRepeatPeriod={1400}
+        <IndiaRiskMap
+          events={events}
+          selectedEvent={selectedEvent}
+          onSelectEvent={openEvent}
         />
 
 
@@ -1005,8 +962,14 @@ const changeRiskEvent = (direction) => {
 
 
           <h2>
-            {selectedEvent.location}
+            {selectedEvent.city || selectedEvent.state || selectedEvent.country || selectedEvent.location}
           </h2>
+
+          <div className="event-locality">
+            {[selectedEvent.city, selectedEvent.state, selectedEvent.country]
+              .filter(Boolean)
+              .join(", ") || "Resolving location..."}
+          </div>
 
 
           <div className="coordinates">
