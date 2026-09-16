@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
@@ -118,10 +118,13 @@ function EventMap({ event }) {
     const map = L.map(containerRef.current, {
       zoomControl: true,
       attributionControl: true,
-    }).setView(
-      [event.lat, event.lng],
-      12
-    );
+      minZoom: 8,
+      maxZoom: 18,
+      zoomSnap: 0.5,
+      zoomDelta: 0.5,
+      wheelDebounceTime: 80,
+      wheelPxPerZoomLevel: 180,
+    }).setView([event.lat, event.lng], 12);
 
     mapRef.current = map;
 
@@ -306,32 +309,28 @@ function EventMap({ event }) {
 function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
   const mapRef = useRef(null);
   const containerRef = useRef(null);
+  const markerLayerRef = useRef(null);
 
+  // Create the map exactly once. The initial view is India-focused,
+  // not event-focused. Event zooming happens only after a marker click.
   useEffect(() => {
-    if (!containerRef.current) return;
-
-    if (mapRef.current) {
-      mapRef.current.remove();
-      mapRef.current = null;
-    }
+    if (!containerRef.current || mapRef.current) return;
 
     const map = L.map(containerRef.current, {
       zoomControl: true,
       attributionControl: true,
       minZoom: 4,
-      maxZoom: 12,
+      maxZoom: 14,
       maxBounds: L.latLngBounds(
         [5.5, 66.5],
         [38.5, 100]
       ),
       maxBoundsViscosity: 1,
-    }).fitBounds(
-      [
-        [6.5, 68],
-        [37.2, 97.5],
-      ],
-      { padding: [18, 18] }
-    );
+      zoomSnap: 0.5,
+      zoomDelta: 0.5,
+      wheelDebounceTime: 80,
+      wheelPxPerZoomLevel: 180,
+    }).setView([22.5, 79.0], 5);
 
     mapRef.current = map;
 
@@ -340,89 +339,108 @@ function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
       attribution: "&copy; OpenStreetMap contributors",
     }).addTo(map);
 
+    markerLayerRef.current = L.layerGroup().addTo(map);
+
+    const resizeTimer = window.setTimeout(() => {
+      map.invalidateSize({ pan: false });
+    }, 150);
+
+    return () => {
+      window.clearTimeout(resizeTimer);
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+      markerLayerRef.current = null;
+    };
+  }, []);
+
+  // Refresh markers without recreating the map or resetting its zoom.
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = markerLayerRef.current;
+
+    if (!map || !layer) return;
+
+    layer.clearLayers();
+
     events
       .filter((event) => ["HIGH", "MEDIUM", "LOW"].includes(event.risk))
       .forEach((event) => {
-      const riskClass = event.risk.toLowerCase();
-      const isHigh = event.risk === "HIGH";
-      const isSelected = selectedEvent?.id === event.id;
+        const riskClass = event.risk.toLowerCase();
+        const isHigh = event.risk === "HIGH";
+        const isSelected = selectedEvent?.id === event.id;
 
-      const icon = L.divIcon({
-        className: "india-risk-marker",
-        html: `
-          <div class="india-marker-shell ${riskClass} ${isSelected ? "selected" : ""}">
-            <div class="india-marker-core"></div>
-          </div>
-        `,
-        iconSize: [34, 34],
-        iconAnchor: [17, 17],
+        const icon = L.divIcon({
+          className: "india-risk-marker",
+          html: `
+            <div class="india-marker-shell ${riskClass} ${isSelected ? "selected" : ""}">
+              <div class="india-marker-core"></div>
+            </div>
+          `,
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
+        });
+
+        const marker = L.marker([event.lat, event.lng], {
+          icon,
+          title: event.id,
+        })
+          .addTo(layer)
+          .bindTooltip(
+            `<div class="hotspot-tooltip">
+              <strong>${event.location}</strong>
+              <span>${event.id} · ${event.type}</span>
+              <b class="${riskClass}">${event.risk} RISK</b>
+              <small>${event.lat.toFixed(4)}° N, ${event.lng.toFixed(4)}° E</small>
+            </div>`,
+            {
+              direction: "top",
+              offset: [0, -16],
+              opacity: 1,
+              sticky: true,
+              className: "hotspot-tooltip-wrap",
+            }
+          );
+
+        marker.on("click", () => {
+          // Only an explicit event click changes the map to a local view.
+          map.flyTo([event.lat, event.lng], 12, {
+            duration: 0.9,
+            easeLinearity: 0.2,
+          });
+          onSelectEvent(event);
+        });
+
+        if (isHigh) {
+          L.circle([event.lat, event.lng], {
+            radius: isSelected ? 32000 : 18000,
+            color: "#ff4438",
+            weight: 1,
+            opacity: isSelected ? 0.7 : 0.35,
+            fillColor: "#ff4438",
+            fillOpacity: isSelected ? 0.12 : 0.04,
+            interactive: false,
+          }).addTo(layer);
+        }
       });
 
-      const marker = L.marker([event.lat, event.lng], {
-        icon,
-        title: event.id,
-      })
-        .addTo(map)
-        .bindTooltip(
-          `<div class="hotspot-tooltip">
-            <strong>${event.location}</strong>
-            <span>${event.id} · ${event.type}</span>
-            <b class="${riskClass}">${event.risk} RISK</b>
-            <small>${event.lat.toFixed(4)}° N, ${event.lng.toFixed(4)}° E</small>
-          </div>`,
-          {
-            direction: "top",
-            offset: [0, -16],
-            opacity: 1,
-            sticky: true,
-            className: "hotspot-tooltip-wrap",
-          }
-        );
+    const resizeTimer = window.setTimeout(() => {
+      map.invalidateSize({ pan: false });
+    }, 80);
 
-      marker.on("click", () => {
-        map.flyTo(
-          [event.lat, event.lng],
-          14,
-          {
-            duration: 1.4,
-            easeLinearity: 0.18,
-          }
-        );
-        onSelectEvent(event);
-      });
+    return () => window.clearTimeout(resizeTimer);
+  }, [events, selectedEvent, onSelectEvent]);
 
-      if (isHigh) {
-        L.circle([event.lat, event.lng], {
-          radius: isSelected ? 32000 : 18000,
-          color: "#ff4438",
-          weight: 1,
-          opacity: isSelected ? 0.7 : 0.35,
-          fillColor: "#ff4438",
-          fillOpacity: isSelected ? 0.12 : 0.04,
-          interactive: false,
-        }).addTo(map);
-      }
-    });
-
-    setTimeout(() => map.invalidateSize(), 150);
-
-    return () => {
-      map.remove();
-      mapRef.current = null;
-    };
-  }, [events, onSelectEvent]);
-
+  // Returning to Global View resets to the India overview.
+  // Selecting an event does not trigger an automatic second zoom;
+  // marker clicks are the only action that zooms into an event.
   useEffect(() => {
-    if (!mapRef.current || !selectedEvent) return;
+    if (!mapRef.current || selectedEvent) return;
 
-    mapRef.current.flyTo(
-      [selectedEvent.lat, selectedEvent.lng],
-      14,
-      {
-        duration: 1.4,
-        easeLinearity: 0.18,
-      }
-    );
+    mapRef.current.setView([22.5, 79.0], 5, {
+      animate: false,
+    });
   }, [selectedEvent]);
 
   return (
@@ -513,13 +531,6 @@ function App() {
       clearInterval(refreshTimer);
     };
   }, []);
-
-  useEffect(() => {
-    if (!selectedEvent && events.length > 0) {
-      const firstHighRisk = events.find((event) => event.risk === "HIGH");
-      setSelectedEvent(firstHighRisk || events[0]);
-    }
-  }, [events, selectedEvent]);
 
   useEffect(() => {
     if (!selectedEvent || !Number.isFinite(selectedEvent.lat) || !Number.isFinite(selectedEvent.lng)) {
@@ -633,21 +644,35 @@ const changeRiskEvent = (direction) => {
     };
   }, []);
 
-  const openEvent = (event) => {
+  const openEvent = useCallback((event) => {
+    if (!event) return;
     setSelectedEvent(event);
     setPanelOpen(true);
-  };
+  }, []);
 
   const openRiskEvents = () => {
+    setDashboardView("global");
+    setPanelOpen(false);
+
     const firstHighRisk = events.find(
       (event) => event.risk === "HIGH"
     );
 
     if (firstHighRisk) {
-      openEvent(firstHighRisk);
+      setSelectedEvent(firstHighRisk);
+      setPanelOpen(true);
+      setActiveTab("Overview");
     } else if (events.length > 0) {
-      openEvent(events[0]);
+      setSelectedEvent(events[0]);
+      setPanelOpen(true);
+      setActiveTab("Overview");
     }
+  };
+
+  const openDashboardView = (view) => {
+    setPanelOpen(false);
+    setSelectedEvent(null);
+    setDashboardView(view);
   };
 
   const closePanel = () => {
@@ -683,85 +708,56 @@ const changeRiskEvent = (direction) => {
     setPanelOpen(false);
     setSelectedEvent(null);
     setDashboardView("global");
-
   };
 
   return (
     <div className="app">
 
-      {/* ================= HEADER ================= */}
-
       <header className="topbar">
-
         <div className="brand">
           <h1>GeoFlare</h1>
-          <p>Satellite Thermal Intelligence</p>
         </div>
 
-        <nav className="navigation">
-
+        <nav className="navigation" aria-label="Primary navigation">
           <button
-            className={dashboardView === "global" && !panelOpen ? "nav-button active" : "nav-button"}
-            onClick={() => {
-              setDashboardView("global");
-              focusIndia();
-            }}
+            className={`nav-button ${dashboardView === "global" ? "active" : ""}`}
+            onClick={focusIndia}
           >
-            ◉ Global View
+            <span className="nav-icon" aria-hidden="true">◉</span>
+            Global View
           </button>
-
+          <button className="nav-button risk-button" onClick={openRiskEvents}>
+            <span className="nav-icon" aria-hidden="true">♨</span>
+            Risk Events
+          </button>
           <button
-            className={panelOpen ? "nav-button risk-button active" : "nav-button risk-button"}
-            onClick={() => {
-              setDashboardView("risk");
-              openRiskEvents();
-            }}
+            className={`nav-button ${dashboardView === "facilities" ? "active" : ""}`}
+            onClick={() => openDashboardView("facilities")}
           >
-            ● Risk Events
+            <span className="nav-icon" aria-hidden="true">▦</span>
+            Facilities
           </button>
-
           <button
-            className={dashboardView === "facilities" ? "nav-button active" : "nav-button"}
-            onClick={() => {
-              setPanelOpen(false);
-              setSelectedEvent(null);
-              setDashboardView("facilities");
-            }}
+            className={`nav-button ${dashboardView === "analytics" ? "active" : ""}`}
+            onClick={() => openDashboardView("analytics")}
           >
-            ▦ Facilities
+            <span className="nav-icon" aria-hidden="true">▥</span>
+            Analytics
           </button>
-
           <button
-            className={dashboardView === "analytics" ? "nav-button active" : "nav-button"}
-            onClick={() => {
-              setPanelOpen(false);
-              setSelectedEvent(null);
-              setDashboardView("analytics");
-            }}
+            className={`nav-button ${dashboardView === "reports" ? "active" : ""}`}
+            onClick={() => openDashboardView("reports")}
           >
-            ▥ Analytics
+            <span className="nav-icon" aria-hidden="true">▤</span>
+            Reports
           </button>
-
-          <button
-            className={dashboardView === "reports" ? "nav-button active" : "nav-button"}
-            onClick={() => {
-              setPanelOpen(false);
-              setSelectedEvent(null);
-              setDashboardView("reports");
-            }}
-          >
-            ▤ Reports
-          </button>
-
         </nav>
 
-        <div className="live-status">
+        <div className="live-status" aria-label="System status">
           <span className="status-dot"></span>
           LIVE
         </div>
-
       </header>
-
 
       {/* ================= GLOBE ================= */}
 
@@ -791,17 +787,6 @@ const changeRiskEvent = (direction) => {
           onSelectEvent={openEvent}
         />
 
-
-        {/* Focus India */}
-
-        {!panelOpen && (
-          <button
-            className="focus-india"
-            onClick={focusIndia}
-          >
-            🌏 Focus India
-          </button>
-        )}
 
       </main>
 
@@ -2227,26 +2212,26 @@ const changeRiskEvent = (direction) => {
 
           <div className="stat-card">
             <span>ACTIVE EVENTS</span>
-            <strong>127</strong>
-            <small>+12% vs last 24h</small>
+            <strong>{events.length}</strong>
+            <small>LIVE EVENT EPISODES</small>
           </div>
 
           <div className="stat-card">
             <span>HIGH RISK</span>
-            <strong>09</strong>
-            <small>+3 vs last 24h</small>
+            <strong>{String(highRiskEvents.length).padStart(2, "0")}</strong>
+            <small>CURRENT HIGH-RISK</small>
           </div>
 
           <div className="stat-card">
             <span>PERSISTENT</span>
-            <strong>18</strong>
-            <small>+5 vs last 24h</small>
+            <strong>{events.filter((event) => event.persistenceDays >= 1).length}</strong>
+            <small>ESTIMATED PERSISTENCE</small>
           </div>
 
           <div className="stat-card">
             <span>INDUSTRIAL</span>
-            <strong>34</strong>
-            <small>+8 vs last 24h</small>
+            <strong>{events.filter((event) => event.modelPredictedClass === "industrial_fire").length}</strong>
+            <small>MODEL CLASSIFIED</small>
           </div>
 
         </div>
@@ -2259,7 +2244,7 @@ const changeRiskEvent = (direction) => {
       {!panelOpen && dashboardView === "global" && !eventsLoading && !eventsError && (
 
         <div className="instructions">
-          Drag to rotate • Scroll to explore • Click an event
+          Pan to explore • Scroll to zoom • Click an event to focus
         </div>
 
       )}
