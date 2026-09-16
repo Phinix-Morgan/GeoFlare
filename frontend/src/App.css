@@ -750,25 +750,27 @@ button {
   position: absolute;
 
   left: 28px;
-  bottom: 24px;
+  bottom: 20px;
 
   display: flex;
 
-  gap: 9px;
+  gap: 8px;
 
   z-index: 20;
 }
 
 .stat-card {
-  width: 150px;
+  width: 148px;
 
-  padding: 12px 15px;
+  padding: 13px 15px 12px;
 
   border-radius: 8px;
 
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(99, 160, 211, 0.16);
 
-  background: rgba(10, 16, 22, 0.88);
+  background: rgba(4, 10, 16, 0.82);
+
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .28);
 
   backdrop-filter: blur(12px);
 }
@@ -2700,21 +2702,32 @@ button:focus-visible {
 /* ---------- Main globe ---------- */
 
 .globe-section {
+  top: 82px;
   background:
-    radial-gradient(circle at 50% 48%, rgba(22,48,61,.14), transparent 38%),
-    #070b10;
+    radial-gradient(circle at 50% 48%, rgba(20,55,88,.22), transparent 42%),
+    radial-gradient(circle at 50% 100%, rgba(7,27,48,.18), transparent 48%),
+    #03070c;
 }
 
 .globe-section.panel-mode {
   width: 57%;
 }
 
+.globe-section::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 46%, transparent 44%, rgba(0,3,8,.42) 100%);
+  z-index: 2;
+}
+
 .focus-india {
   top: 24px;
   left: 24px;
-  background: rgba(8,14,20,.82);
-  border-color: rgba(255,255,255,.12);
-  box-shadow: 0 10px 35px rgba(0,0,0,.25);
+  background: rgba(4,10,17,.78);
+  border-color: rgba(105,170,231,.22);
+  box-shadow: 0 10px 35px rgba(0,0,0,.35), 0 0 22px rgba(28,104,177,.08);
 }
 
 .focus-india:hover {
@@ -3039,7 +3052,7 @@ button:focus-visible {
 }
 
 .india-risk-map .leaflet-popup-close-button {
-  color: #78848d !important;
+  color: #798d78 !important;
 }
 
 .india-risk-map .leaflet-popup-close-button:hover {
@@ -3643,6 +3656,11 @@ button:focus-visible {
   line-height: 1.5;
 }
 
+/* Full-viewport globe presentation */
+.globe-section {
+  top: 0;
+}
+
 .dashboard-data-row {
   width: 100%;
   display: flex;
@@ -3699,6 +3717,75 @@ button:focus-visible {
   color: #65717b;
   font-size: 6px;
   letter-spacing: .8px;
+}
+
+/* Investigation readability and warm canvas */
+.investigation-screen {
+  background: #eab6a4;
+  color: #182129;
+}
+
+.investigation-header {
+  background: rgba(234, 182, 164, .96);
+  border-bottom-color: rgba(24, 33, 41, .16);
+}
+
+.investigation-back,
+.investigation-title span {
+  color: #4d3d3a;
+  font-size: 13px;
+}
+
+.investigation-title strong {
+  color: #182129;
+  font-size: 15px;
+}
+
+.investigation-risk {
+  font-size: 12px;
+}
+
+.location-heading span,
+.card-heading span,
+.card-heading small,
+.summary-grid small {
+  font-size: 11px;
+}
+
+.location-heading h1 {
+  color: #182129;
+  font-size: 36px;
+}
+
+.location-heading p {
+  color: #4d3d3a;
+  font-size: 14px;
+}
+
+.card-heading {
+  min-height: 52px;
+}
+
+.summary-grid strong {
+  font-size: 18px;
+}
+
+.classification strong,
+.classification-score {
+  font-size: 17px;
+}
+
+.classification p,
+.evidence-item small,
+.context-list span,
+.context-list strong,
+.risk-factor p {
+  font-size: 12px;
+}
+
+.evidence-item strong,
+.risk-factor strong {
+  font-size: 14px;
 }
 
 .analytics-grid {

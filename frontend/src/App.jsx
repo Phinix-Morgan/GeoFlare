@@ -657,7 +657,7 @@ const changeRiskEvent = (direction) => {
       {
         lat: 22.5,
         lng: 79,
-        altitude: 1.75
+          altitude: 1.75
       },
       1000
     );
@@ -774,7 +774,11 @@ const changeRiskEvent = (direction) => {
 
           backgroundColor="#070b10"
 
-          globeImageUrl="https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg"
+          globeImageUrl="https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+
+          bumpImageUrl="https://threejs.org/examples/textures/planets/earth_normal_2048.jpg"
+
+          bumpScale={0.08}
 
           atmosphereColor="#315d7d"
           atmosphereAltitude={0.12}
@@ -784,11 +788,11 @@ const changeRiskEvent = (direction) => {
           pointLat="lat"
           pointLng="lng"
 
-          pointColor={(event) =>
-            event.risk === "HIGH"
-              ? "#ff3b30"
-              : "#ff9f43"
-          }
+          pointColor={(event) => {
+            if (event.risk === "HIGH") return "#8f1d2c";
+            if (event.risk === "MEDIUM") return "#c65d08";
+            return "#f3df82";
+          }}
 
           pointAltitude={0.025}
 
@@ -798,7 +802,7 @@ const changeRiskEvent = (direction) => {
               : 0.09
           }
 
-          pointResolution={12}
+          pointResolution={24}
 
           pointsMerge={false}
 
@@ -821,7 +825,7 @@ const changeRiskEvent = (direction) => {
           ringLat="lat"
           ringLng="lng"
 
-          ringColor="#ff3b30"
+          ringColor="#8f1d2c"
 
           ringMaxRadius={2.2}
 
@@ -2289,7 +2293,7 @@ const changeRiskEvent = (direction) => {
 
       {/* INSTRUCTIONS */}
 
-      {!panelOpen && dashboardView === "global" && (
+      {!panelOpen && dashboardView === "global" && !eventsLoading && !eventsError && (
 
         <div className="instructions">
           Drag to rotate • Scroll to explore • Click an event
