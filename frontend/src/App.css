@@ -3719,60 +3719,60 @@ button:focus-visible {
   letter-spacing: .8px;
 }
 
-/* Investigation readability and warm canvas */
+/* Investigation screen defaults */
 .investigation-screen {
-  background: #eab6a4;
-  color: #182129;
+  background: #070b10;
+  color: #f4f7fa;
 }
 
 .investigation-header {
-  background: rgba(234, 182, 164, .96);
-  border-bottom-color: rgba(24, 33, 41, .16);
+  background: rgba(7, 11, 16, 0.96);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
 }
 
 .investigation-back,
 .investigation-title span {
-  color: #4d3d3a;
-  font-size: 13px;
+  color: #8d99a4;
+  font-size: 11px;
 }
 
 .investigation-title strong {
-  color: #182129;
-  font-size: 15px;
+  color: #f3f6f8;
+  font-size: 12px;
 }
 
 .investigation-risk {
-  font-size: 12px;
+  font-size: 9px;
 }
 
 .location-heading span,
 .card-heading span,
 .card-heading small,
 .summary-grid small {
-  font-size: 11px;
+  font-size: 9px;
 }
 
 .location-heading h1 {
-  color: #182129;
-  font-size: 36px;
+  color: #f4f7fa;
+  font-size: 30px;
 }
 
 .location-heading p {
-  color: #4d3d3a;
-  font-size: 14px;
+  color: #707c87;
+  font-size: 10px;
 }
 
 .card-heading {
-  min-height: 52px;
+  min-height: 44px;
 }
 
 .summary-grid strong {
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .classification strong,
 .classification-score {
-  font-size: 17px;
+  font-size: 12px;
 }
 
 .classification p,
@@ -3780,12 +3780,12 @@ button:focus-visible {
 .context-list span,
 .context-list strong,
 .risk-factor p {
-  font-size: 12px;
+  font-size: 8px;
 }
 
 .evidence-item strong,
 .risk-factor strong {
-  font-size: 14px;
+  font-size: 10px;
 }
 
 .analytics-grid {

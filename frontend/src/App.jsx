@@ -561,10 +561,17 @@ const changeRiskEvent = (direction) => {
       1200
     );
 
-    globeRef.current.controls().enableZoom = true;
-    globeRef.current.controls().enablePan = false;
-    globeRef.current.controls().autoRotate = false;
-    globeRef.current.controls().rotateSpeed = 0.35;
+    const controls = globeRef.current.controls();
+
+    controls.enableZoom = true;
+    controls.enablePan = false;
+    controls.autoRotate = false;
+    controls.rotateSpeed = 0.35;
+    controls.zoomSpeed = 0.72;
+    controls.dampingFactor = 0.12;
+    controls.minDistance = 120;
+    controls.maxDistance = 420;
+    controls.enableDamping = true;
   }, []);
 
   const focusEvent = (event) => {
@@ -774,14 +781,21 @@ const changeRiskEvent = (direction) => {
 
           backgroundColor="#070b10"
 
+          rendererConfig={{
+            antialias: true,
+            alpha: false,
+            powerPreference: "high-performance",
+          }}
+
+          showAtmosphere={true}
+          atmosphereColor="#6ab2ff"
+          atmosphereAltitude={0.18}
+
           globeImageUrl="https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
 
           bumpImageUrl="https://threejs.org/examples/textures/planets/earth_normal_2048.jpg"
 
           bumpScale={0.08}
-
-          atmosphereColor="#315d7d"
-          atmosphereAltitude={0.12}
 
           pointsData={events}
 
@@ -802,7 +816,7 @@ const changeRiskEvent = (direction) => {
               : 0.09
           }
 
-          pointResolution={24}
+          pointResolution={48}
 
           pointsMerge={false}
 
