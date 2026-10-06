@@ -94,7 +94,8 @@ FIRMS_MAP_KEY=YOUR_NASA_FIRMS_MAP_KEY
 - Use the Session pooler URI from Supabase Dashboard → Project Settings → Database → Connect.
 - The driver format must include `postgresql+psycopg://`.
 - If your password contains special characters such as `@`, encode them in the connection string (for example `%40`).
-- The frontend expects the API on `http://127.0.0.1:8000`.
+- Set `CORS_ALLOWED_ORIGINS` to the exact frontend origin(s), separated by commas.
+- The frontend API origin is configured with `VITE_API_BASE_URL` in `frontend/.env`.
 
 ## Install dependencies
 
@@ -127,7 +128,17 @@ Verify the health endpoint:
 http://127.0.0.1:8000/health
 ```
 
+The health endpoint returns HTTP `503` when the database check fails. Details
+are recorded in backend logs; database connection details are not returned to
+the caller.
+
 ### 2) Start the frontend
+
+Copy `frontend/.env.example` to `frontend/.env` and configure
+`VITE_API_BASE_URL` if the API is not at its local default. Vite embeds this
+value into the frontend build, so set it in the build environment for each
+deployment. Do not put credentials or other secrets in `VITE_*` variables;
+they are exposed to browsers.
 
 From the frontend folder:
 
@@ -157,6 +168,7 @@ This validates the SQLAlchemy connection to Supabase and confirms required table
 The backend exposes the following main routes:
 
 - `GET /health` – backend health and pipeline status
+- `GET /ingestion/status` – latest ingestion attempt, last successful run, and result counts
 - `GET /events` – latest event list for the dashboard
 - `GET /events/geojson` – GeoJSON export of event points
 - `POST /ingest` – trigger ingestion manually
@@ -194,13 +206,21 @@ uv run python -m backend.test_real_events
 ### Frontend cannot reach backend
 
 - Confirm the backend is running on port `8000`.
-- Make sure CORS is enabled for the Vite dev server origin.
-- Confirm the API URL in the frontend matches `http://127.0.0.1:8000`.
+- Make sure `CORS_ALLOWED_ORIGINS` includes the exact frontend origin.
+- Confirm `VITE_API_BASE_URL` in the frontend environment matches the API origin.
 
 ### FIRMS ingestion issues
 
 - Verify `FIRMS_MAP_KEY` is present and valid.
 - Check ingestion output in backend logs after running the API.
+- Check `/ingestion/status` for the latest attempt and last successful run.
+
+### Ingestion status limitations
+
+Ingestion status is currently held in backend process memory. It resets when
+the backend restarts and is not shared across multiple backend workers. Use a
+single backend worker until status and ingestion scheduling are moved to
+persistent/shared infrastructure.
 
 ## Notes
 

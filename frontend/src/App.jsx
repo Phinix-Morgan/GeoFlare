@@ -3,7 +3,9 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
+).replace(/\/+$/, "");
 
 function formatPersistence(days) {
   const totalMinutes = Math.max(0, Math.round(Number(days || 0) * 24 * 60));
@@ -35,6 +37,70 @@ function formatEventType(predictedClass) {
   return labels[predictedClass] || "Thermal Anomaly";
 }
 
+function formatEventLocation(event) {
+  const locality = [event.city, event.state].filter(Boolean).join(", ");
+  if (locality) return locality;
+
+  if (Number.isFinite(event.lat) && Number.isFinite(event.lng)) {
+    return `${event.lat.toFixed(2)}°, ${event.lng.toFixed(2)}°`;
+  }
+
+  return event.location || "Location unavailable";
+}
+
+function formatTimeAgo(timestamp) {
+  if (!timestamp) return "not recorded";
+
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000)
+  );
+  if (elapsedSeconds < 60) return "just now";
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}h ago`;
+
+  return `${Math.floor(elapsedHours / 24)}d ago`;
+}
+
+function getFeedIndicator(status, statusUnavailable) {
+  if (statusUnavailable) {
+    return { label: "STATUS OFFLINE", tone: "error" };
+  }
+  if (!status) {
+    return { label: "CHECKING FEED", tone: "unknown" };
+  }
+  if (status.status === "running") {
+    return { label: "SYNCING", tone: "running" };
+  }
+  if (status.status === "failed") {
+    return { label: "SYNC FAILED", tone: "error" };
+  }
+  if (status.status === "partial") {
+    return { label: "PARTIAL UPDATE", tone: "warning" };
+  }
+  if (status.status === "never_run") {
+    return { label: "AWAITING SYNC", tone: "unknown" };
+  }
+  if (status.status !== "success" || !status.last_success_at) {
+    return { label: "FEED UNKNOWN", tone: "unknown" };
+  }
+
+  const ageMs = Date.now() - new Date(status.last_success_at).getTime();
+  const staleAfterMs = (status.interval_seconds || 15 * 60) * 2 * 1000;
+  if (!Number.isFinite(ageMs) || ageMs > staleAfterMs) {
+    return { label: "DATA DELAYED", tone: "warning" };
+  }
+
+  return {
+    label: `UPDATED ${formatTimeAgo(status.last_success_at)}`,
+    tone: "healthy",
+  };
+}
+
 function intensityFromFrp(frp) {
   const value = Number(frp || 0);
 
@@ -54,7 +120,7 @@ function mapBackendEvent(event) {
     state: "",
     country: "India",
     type: formatEventType(event.predicted_class),
-    risk: event.risk_level || "LOW",
+    risk: String(event.risk_level || "LOW").toUpperCase(),
     confidence: Math.round(Number(event.prediction_confidence || 0) * 100),
     satelliteConfidence: Math.round(Number(event.confidence_score || 0) * 100),
     persistence: formatPersistence(event.persistence_days),
@@ -462,7 +528,7 @@ function IndiaRiskMap({ events, selectedEvent, onSelectEvent }) {
 
       <div className="india-map-status">
         <span className="map-live-dot"></span>
-        LIVE EVENT OVERLAY
+        ACTIVE EVENT OVERLAY
       </div>
     </div>
   );
@@ -476,16 +542,54 @@ function App() {
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [eventsError, setEventsError] = useState(null);
+  const [ingestionStatus, setIngestionStatus] = useState(null);
+  const [ingestionStatusUnavailable, setIngestionStatusUnavailable] = useState(false);
   const [dashboardView, setDashboardView] = useState("global");
+  const [alertsOpen, setAlertsOpen] = useState(false);
   const [screenWidth, setScreenWidth] = useState(window.innerWidth);
   const [replayStep, setReplayStep] = useState(4);
   const [isReplaying, setIsReplaying] = useState(false);
   const geocodeCache = useRef(new Map());
+  const alertMenuRef = useRef(null);
 
 
-    const highRiskEvents = events.filter(
+  const highRiskEvents = events.filter(
     (event) => event.risk === "HIGH"
   );
+  const alertEvents = events
+    .filter((event) => event.risk === "HIGH" || event.risk === "MEDIUM")
+    .sort((first, second) => {
+      if (first.risk === second.risk) return 0;
+      return first.risk === "HIGH" ? -1 : 1;
+    });
+  const selectedAlertIndex = alertEvents.findIndex(
+    (event) => event.id === selectedEvent?.id
+  );
+  const feedIndicator = getFeedIndicator(
+    ingestionStatus,
+    ingestionStatusUnavailable
+  );
+
+  useEffect(() => {
+    if (!alertsOpen) return undefined;
+
+    const closeOnOutsideClick = (event) => {
+      if (!alertMenuRef.current?.contains(event.target)) {
+        setAlertsOpen(false);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setAlertsOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [alertsOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -525,6 +629,44 @@ function App() {
 
     loadEvents();
     const refreshTimer = setInterval(loadEvents, 60000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(refreshTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let requestInFlight = false;
+
+    const loadIngestionStatus = async () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/ingestion/status`);
+        if (!response.ok) {
+          throw new Error(`Backend returned HTTP ${response.status}`);
+        }
+
+        const status = await response.json();
+        if (!cancelled) {
+          setIngestionStatus(status);
+          setIngestionStatusUnavailable(false);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setIngestionStatusUnavailable(true);
+          console.warn("Unable to load ingestion status:", error);
+        }
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    loadIngestionStatus();
+    const refreshTimer = setInterval(loadIngestionStatus, 60000);
 
     return () => {
       cancelled = true;
@@ -588,6 +730,7 @@ function App() {
 
   const openRiskEvent = (event) => {
     if (!event) return;
+  setAlertsOpen(false);
   setSelectedEvent(event);
   setPanelOpen(true);
   setActiveTab("Overview");
@@ -597,20 +740,20 @@ function App() {
 const changeRiskEvent = (direction) => {
   if (!selectedEvent) return;
 
-  const currentIndex = highRiskEvents.findIndex(
+  const currentIndex = alertEvents.findIndex(
     (event) => event.id === selectedEvent.id
   );
 
   if (currentIndex === -1) {
-    openRiskEvent(highRiskEvents[0]);
+    openRiskEvent(alertEvents[0]);
     return;
   }
 
   const nextIndex =
-    (currentIndex + direction + highRiskEvents.length) %
-    highRiskEvents.length;
+    (currentIndex + direction + alertEvents.length) %
+    alertEvents.length;
 
-  openRiskEvent(highRiskEvents[nextIndex]);
+  openRiskEvent(alertEvents[nextIndex]);
 };
 
   const startReplay = () => {
@@ -646,20 +789,23 @@ const changeRiskEvent = (direction) => {
 
   const openEvent = useCallback((event) => {
     if (!event) return;
+    setAlertsOpen(false);
     setSelectedEvent(event);
     setPanelOpen(true);
   }, []);
 
   const openRiskEvents = () => {
+    setAlertsOpen(false);
     setDashboardView("global");
     setPanelOpen(false);
 
     const firstHighRisk = events.find(
       (event) => event.risk === "HIGH"
     );
+    const firstAlert = firstHighRisk || alertEvents[0];
 
-    if (firstHighRisk) {
-      setSelectedEvent(firstHighRisk);
+    if (firstAlert) {
+      setSelectedEvent(firstAlert);
       setPanelOpen(true);
       setActiveTab("Overview");
     } else if (events.length > 0) {
@@ -670,12 +816,14 @@ const changeRiskEvent = (direction) => {
   };
 
   const openDashboardView = (view) => {
+    setAlertsOpen(false);
     setPanelOpen(false);
     setSelectedEvent(null);
     setDashboardView(view);
   };
 
   const closePanel = () => {
+    setAlertsOpen(false);
     setPanelOpen(false);
     setSelectedEvent(null);
   };
@@ -705,6 +853,7 @@ const changeRiskEvent = (direction) => {
   };
 
   const focusIndia = () => {
+    setAlertsOpen(false);
     setPanelOpen(false);
     setSelectedEvent(null);
     setDashboardView("global");
@@ -753,9 +902,98 @@ const changeRiskEvent = (direction) => {
           </button>
         </nav>
 
-        <div className="live-status" aria-label="System status">
+        <div className="alert-menu" ref={alertMenuRef}>
+          <button
+            className={`alert-menu-trigger ${alertsOpen ? "open" : ""}`}
+            type="button"
+            aria-expanded={alertsOpen}
+            aria-controls="risk-alert-dropdown"
+            aria-label={`Risk alerts, ${alertEvents.length} active`}
+            disabled={panelOpen || investigationOpen}
+            onClick={() => setAlertsOpen((isOpen) => !isOpen)}
+          >
+            <span className="alert-menu-icon" aria-hidden="true">!</span>
+            <span>Alerts</span>
+            <span className={`alert-menu-badge ${alertEvents.length ? "has-alerts" : ""}`}>
+              {alertEvents.length}
+            </span>
+          </button>
+
+          {alertsOpen && !panelOpen && !investigationOpen && (
+            <div
+              className="alert-dropdown"
+              id="risk-alert-dropdown"
+              aria-label="Active medium- and high-risk alerts"
+              aria-live="polite"
+            >
+              <div className="alert-center-heading">
+                <div className="alert-center-title">
+                  <span className="alert-center-indicator" aria-hidden="true"></span>
+                  <div>
+                    <strong>Risk alerts</strong>
+                    <small>MEDIUM &amp; HIGH</small>
+                  </div>
+                </div>
+                <span className="alert-center-count">
+                  {alertEvents.length} ACTIVE
+                </span>
+              </div>
+
+              {eventsLoading ? (
+                <p className="alert-dropdown-message">Loading alerts…</p>
+              ) : eventsError ? (
+                <p className="alert-dropdown-message">Alerts are unavailable while the event feed is offline.</p>
+              ) : alertEvents.length === 0 ? (
+                <p className="alert-dropdown-message">No medium or high risk events right now.</p>
+              ) : (
+                <div
+                  className="alert-center-list"
+                  aria-label="All active risk alerts"
+                  tabIndex={0}
+                >
+                  {alertEvents.map((event) => (
+                    <button
+                      key={event.id}
+                      className={`screen-alert ${event.risk.toLowerCase()}`}
+                      onClick={() => openEvent(event)}
+                      aria-label={`View ${event.risk.toLowerCase()} risk alert for ${event.id}`}
+                    >
+                      <span className="screen-alert-level">{event.risk} RISK</span>
+                      <strong>{formatEventLocation(event)}</strong>
+                      <small>
+                        {event.type} · {event.confidence}% confidence
+                      </small>
+                      <span className="screen-alert-action">View event <span aria-hidden="true">→</span></span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div
+          className={`live-status feed-status ${feedIndicator.tone}`}
+          aria-label={`FIRMS data feed: ${feedIndicator.label}`}
+          title={
+            ingestionStatus?.last_success_at
+              ? `Last successful ingestion: ${new Date(ingestionStatus.last_success_at).toLocaleString()}`
+              : ingestionStatus?.last_attempt_at
+                ? `Last ingestion attempt: ${new Date(ingestionStatus.last_attempt_at).toLocaleString()}`
+                : "No ingestion attempt recorded since this backend started."
+          }
+        >
           <span className="status-dot"></span>
-          LIVE
+          <div className="feed-status-text">
+            <strong>{feedIndicator.label}</strong>
+            <small>
+              {ingestionStatus?.last_success_at
+                ? `Last success ${formatTimeAgo(ingestionStatus.last_success_at)}`
+                : ingestionStatus?.last_attempt_at
+                  ? `Last attempt ${formatTimeAgo(ingestionStatus.last_attempt_at)}`
+                  : "No attempt yet"}
+            </small>
+          </div>
         </div>
       </header>
 
@@ -803,24 +1041,24 @@ const changeRiskEvent = (direction) => {
           <div className="risk-event-switcher">
   <button
     className="risk-switch-button"
+    disabled={alertEvents.length === 0}
     onClick={() => changeRiskEvent(-1)}
   >
     ←
   </button>
 
   <div className="risk-event-counter">
-    <span>HIGH RISK EVENTS</span>
+    <span>RISK ALERTS</span>
     <strong>
-      {highRiskEvents.findIndex(
-        (event) => event.id === selectedEvent.id
-      ) + 1}
-      {" / "}
-      {highRiskEvents.length}
+      {selectedAlertIndex >= 0
+        ? `${selectedAlertIndex + 1} / ${alertEvents.length}`
+        : `${alertEvents.length} ACTIVE`}
     </strong>
   </div>
 
   <button
     className="risk-switch-button"
+    disabled={alertEvents.length === 0}
     onClick={() => changeRiskEvent(1)}
   >
     →
@@ -834,8 +1072,8 @@ const changeRiskEvent = (direction) => {
   </div>
 
   <div>
-    <span>ACTIVE</span>
-    <strong>{highRiskEvents.length}</strong>
+    <span>MEDIUM RISK</span>
+    <strong>{alertEvents.filter((event) => event.risk === "MEDIUM").length}</strong>
   </div>
 
   <div>
@@ -845,11 +1083,11 @@ const changeRiskEvent = (direction) => {
 </div>
 <div className="risk-list">
   <div className="risk-list-title">
-    <span>ACTIVE HIGH-RISK EVENTS</span>
-    <small>{highRiskEvents.length} DETECTED</small>
+    <span>ACTIVE RISK ALERTS</span>
+    <small>{alertEvents.length} DETECTED</small>
   </div>
 
-  {highRiskEvents.map((event) => (
+  {alertEvents.map((event) => (
     <button
       key={event.id}
       className={`risk-event-card ${
@@ -862,7 +1100,7 @@ const changeRiskEvent = (direction) => {
       <div className="risk-event-card-main">
         <div className="risk-event-card-top">
           <strong>{event.id}</strong>
-          <span>HIGH</span>
+          <span className={event.risk.toLowerCase()}>{event.risk}</span>
         </div>
 
         <div className="risk-event-location">
@@ -1074,6 +1312,7 @@ const changeRiskEvent = (direction) => {
             <button
               className="investigate-button"
               onClick={() => {
+                setAlertsOpen(false);
                 setActiveTab("Imagery");
                 setInvestigationOpen(true);
               }}

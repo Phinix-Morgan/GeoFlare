@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 from datetime import datetime, timezone
 from io import StringIO
@@ -11,16 +12,16 @@ from sqlalchemy.orm import Session
 from backend.db import engine
 from backend.db_enrichment import update_event_intelligence
 from backend.event_engine import process_observation
+from backend.ingestion_status import (
+    mark_ingestion_failed,
+    mark_ingestion_started,
+    mark_ingestion_succeeded,
+)
 from backend.repository import insert_observation
 
 
 load_dotenv()
-
-
-FIRMS_MAP_KEY = os.getenv("FIRMS_MAP_KEY")
-
-if not FIRMS_MAP_KEY:
-    raise RuntimeError("FIRMS_MAP_KEY is not set")
+logger = logging.getLogger(__name__)
 
 
 FIRMS_SOURCE = "VIIRS_NOAA20_NRT"
@@ -30,27 +31,45 @@ INDIA_BBOX = "68.1,8.0,97.4,37.1"
 FIRMS_DAY_RANGE = 5
 
 
-FIRMS_URL = (
-    "https://firms.modaps.eosdis.nasa.gov/api/area/csv/"
-    f"{FIRMS_MAP_KEY}/"
-    f"{FIRMS_SOURCE}/"
-    f"{INDIA_BBOX}/"
-    f"{FIRMS_DAY_RANGE}"
-)
-
-
 def fetch_firms() -> pd.DataFrame:
     """
     Fetch recent VIIRS NOAA-20 NRT observations
     for the India bounding box.
     """
 
-    response = requests.get(
-        FIRMS_URL,
-        timeout=60,
+    firms_map_key = os.getenv("FIRMS_MAP_KEY")
+    if not firms_map_key:
+        raise RuntimeError("FIRMS_MAP_KEY is not set")
+
+    firms_url = (
+        "https://firms.modaps.eosdis.nasa.gov/api/area/csv/"
+        f"{firms_map_key}/"
+        f"{FIRMS_SOURCE}/"
+        f"{INDIA_BBOX}/"
+        f"{FIRMS_DAY_RANGE}"
     )
 
-    response.raise_for_status()
+    try:
+        response = requests.get(
+            firms_url,
+            timeout=60,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"NASA FIRMS request failed ({type(exc).__name__})."
+        ) from None
+
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status_code = (
+            exc.response.status_code
+            if exc.response is not None
+            else "unknown"
+        )
+        raise RuntimeError(
+            f"NASA FIRMS returned HTTP {status_code}."
+        ) from None
 
     dataframe = pd.read_csv(
         StringIO(response.text)
@@ -388,11 +407,18 @@ def run_ingestion() -> dict:
     Execute one complete FIRMS ingestion cycle.
     """
 
-    dataframe = fetch_firms()
+    mark_ingestion_started()
 
-    return ingest_dataframe(
-        dataframe
-    )
+    try:
+        dataframe = fetch_firms()
+        result = ingest_dataframe(dataframe)
+    except Exception:
+        mark_ingestion_failed()
+        logger.exception("FIRMS ingestion cycle failed")
+        raise
+
+    mark_ingestion_succeeded(result)
+    return result
 
 
 if __name__ == "__main__":

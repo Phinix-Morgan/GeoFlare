@@ -1,15 +1,33 @@
 import asyncio
+import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .pipeline import pipeline
 from .schemas import GeoFlareEvent
 
 from backend.ingestion import run_ingestion
+from backend.ingestion_status import get_ingestion_status
 
+
+logger = logging.getLogger(__name__)
 
 INGEST_INTERVAL_SECONDS = 15 * 60
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
+CORS_ALLOWED_ORIGINS = tuple(
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        ",".join(DEFAULT_CORS_ORIGINS),
+    ).split(",")
+    if origin.strip()
+)
 
 
 app = FastAPI(
@@ -21,10 +39,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,8 +58,10 @@ async def automatic_ingestion_loop():
                 async with ingestion_lock:
                     await asyncio.to_thread(run_ingestion)
 
-        except Exception as exc:
-            print(f"[GeoFlare] Automatic ingestion failed: {exc}")
+        except Exception:
+            logger.error(
+                "Automatic ingestion failed; see ingestion status and backend logs."
+            )
 
         await asyncio.sleep(INGEST_INTERVAL_SECONDS)
 
@@ -61,7 +78,20 @@ async def startup():
 
 @app.get("/health")
 def health():
-    return pipeline.health()
+    health_status = pipeline.health()
+    status_code = 200 if health_status["status"] == "ok" else 503
+    return JSONResponse(
+        status_code=status_code,
+        content=health_status,
+    )
+
+
+@app.get("/ingestion/status")
+def ingestion_status():
+    return {
+        "interval_seconds": INGEST_INTERVAL_SECONDS,
+        **get_ingestion_status(),
+    }
 
 
 @app.get(

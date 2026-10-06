@@ -1,6 +1,11 @@
+import logging
+
 from sqlalchemy import text
 
 from backend.db import engine
+
+
+logger = logging.getLogger(__name__)
 
 
 class GeoFlarePipeline:
@@ -16,13 +21,13 @@ class GeoFlarePipeline:
                 "pipeline": "operational",
             }
 
-        except Exception as exc:
+        except Exception:
+            logger.exception("GeoFlare health check failed")
             return {
                 "status": "degraded",
                 "service": "GeoFlare API",
                 "database": "error",
                 "pipeline": "degraded",
-                "error": str(exc),
             }
 
     def get_events(self) -> list[dict]:
